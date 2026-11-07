@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rrtos 结构框架图</title>
+<style>
+  :root {
+    --base: #2b6cb0;        /* 基础模块 */
+    --opt: #dd6b20;         /* 可选特性 */
+    --proc: #805ad5;        /* 过程宏 */
+    --ink: #1a202c;
+    --muted: #718096;
+    --bg: #f7fafc;
+    --panel: #ffffff;
+    --line: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 24px 20px 64px; }
+  header h1 { margin: 0 0 6px; font-size: 26px; }
+  header p  { margin: 0 0 20px; color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; }
+  section h2 { margin: 0 0 12px; font-size: 18px; border-left: 4px solid var(--base); padding-left: 10px; }
+  section.opt h2 { border-color: var(--opt); }
+
+  /* 控制条 */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .controls .lbl { color: var(--muted); margin-right: 4px; }
+  button.chip {
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    padding: 6px 14px; border-radius: 999px; cursor: pointer; font-size: 13px;
+  }
+  button.chip:hover { border-color: var(--base); color: var(--base); }
+  button.chip.active { background: var(--base); border-color: var(--base); color: #fff; }
+  button.chip.opt-chip.active { background: var(--opt); border-color: var(--opt); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--muted); align-items: center; }
+  .legend .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; margin-right: 6px; vertical-align: -2px; }
+  .sw.base { background: var(--base); }
+  .sw.opt  { background: #fff; border: 2px dashed var(--opt); }
+  .sw.proc { background: #fff; border: 2px dashed var(--proc); }
+  .legend .arw { font-size: 15px; margin-right: 6px; }
+
+  /* 图区 */
+  #graph-wrap { padding: 8px; }
+  svg { width: 100%; height: auto; display: block; }
+  .node rect { rx: 8; ry: 8; stroke-width: 1.6; cursor: pointer; transition: opacity .15s; }
+  .node text { pointer-events: none; }
+  .node .en { font: 600 11px ui-monospace, Consolas, monospace; }
+  .node .cn { font: 700 14px "Microsoft YaHei", "PingFang SC", sans-serif; }
+  .node.base rect { fill: #ebf4ff; stroke: var(--base); }
+  .node.base .en { fill: var(--base); }
+  .node.base .cn { fill: #1a365d; }
+  .node.opt  rect { fill: #fffaf0; stroke: var(--opt); stroke-dasharray: 6 3; }
+  .node.opt  .en { fill: var(--opt); }
+  .node.opt  .cn { fill: #7b341e; }
+  .node.proc rect { fill: #faf5ff; stroke: var(--proc); stroke-dasharray: 6 3; }
+  .node.proc .en { fill: var(--proc); }
+  .node.proc .cn { fill: #44337a; }
+  .node.dim { opacity: .13; }
+  .node.sel rect { stroke-width: 3.2; }
+  .edge { fill: none; stroke-width: 1.6; }
+  .edge.solid { stroke: #90a4c8; }
+  .edge.opt { stroke: #f0b380; stroke-dasharray: 5 4; }
+  .edge.proc { stroke: #b9a5e8; stroke-dasharray: 5 4; }
+  .edge.dim { opacity: .12; }
+  .edge.hl { stroke-width: 2.6; }
+  .edge.hl.solid { stroke: var(--base); }
+  .edge.hl.opt { stroke: var(--opt); }
+  .edge.hl.proc { stroke: var(--proc); }
+
+  /* 描述面板 */
+  #desc { min-height: 46px; line-height: 1.7; color: #2d3748; }
+  #desc .t { font-weight: 700; }
+  #desc .tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; margin-left: 8px; vertical-align: 1px; }
+  #desc .tag.base { background: #ebf4ff; color: var(--base); }
+  #desc .tag.opt { background: #fffaf0; color: var(--opt); }
+  #desc .tag.proc { background: #faf5ff; color: var(--proc); }
+
+  /* 流程 */
+  .flow { display: flex; flex-wrap: wrap; gap: 0; align-items: stretch; }
+  .step { flex: 1 1 150px; min-width: 140px; background: #edf2f7; border-radius: 8px; padding: 10px 12px; margin: 4px 22px 4px 0; position: relative; font-size: 13px; }
+  .step b { display: block; margin-bottom: 4px; color: #2b4a6f; }
+  .step span { color: var(--muted); font-size: 12px; }
+  .step::after { content: "→"; position: absolute; right: -19px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; }
+  .step:last-child::after { content: ""; }
+  .flow.opt .step b { color: #9c4221; }
+
+  /* 代码块 / 树 */
+  pre.tree, pre.code {
+    background: #1a202c; color: #e2e8f0; border-radius: 8px; padding: 14px 16px;
+    font: 12.5px/1.6 ui-monospace, Consolas, "Courier New", monospace; overflow-x: auto;
+  }
+  pre.code { background: #2d3748; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; }
+  th { background: #edf2f7; }
+  td code { background: #edf2f7; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .feat-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; }
+  .feat-tag.base { background: #ebf4ff; color: var(--base); }
+  .feat-tag.opt { background: #fffaf0; color: var(--opt); }
+
+  footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>rrtos 结构框架图</h1>
+    <p>面向 STM32H7 (Cortex-M7) 的仿 FreeRTOS 精简内核 —— 模块依赖、特性隔离、启动与上下文切换流程</p>
+  </header>
+
+  <!-- ================= 控制 + 图例 ================= -->
+  <section>
+    <div class="controls">
+      <span class="lbl">视图：</span>
+      <button class="chip active" data-mode="all" id="btn-all">全部特性</button>
+      <button class="chip" data-mode="base" id="btn-base">仅基础内核</button>
+      <span class="lbl" style="margin-left:12px">按特性高亮：</span>
+      <button class="chip opt-chip" data-mode="feature:heap">heap</button>
+      <button class="chip opt-chip" data-mode="feature:task-notification">task-notification</button>
+      <button class="chip opt-chip" data-mode="feature:stream-buffer">stream-buffer</button>
+      <button class="chip opt-chip" data-mode="feature:coroutine">coroutine</button>
+      <button class="chip opt-chip" data-mode="feature:mpu">mpu</button>
+    </div>
+    <div class="legend">
+      <span><span class="sw base"></span>基础模块（默认编译）</span>
+      <span><span class="sw opt"></span>可选特性（Cargo feature 条件编译）</span>
+      <span><span class="sw proc"></span>过程宏 crate（生成代码）</span>
+      <span><span class="arw">→</span>依赖</span>
+      <span><span class="arw" style="opacity:.6">⇢</span>可选依赖</span>
+    </div>
+  </section>
+
+  <!-- ================= 模块依赖图 ================= -->
+  <section id="graph-wrap">
+    <h2>内核模块依赖图（点击节点查看说明）</h2>
+    <svg id="graph" viewBox="0 0 1000 800" role="img" aria-label="rrtos 模块依赖图"></svg>
+    <div id="desc">点击左侧任意模块查看详细说明。</div>
+  </section>
+
+  <!-- ================= 启动流程 ================= -->
+  <section>
+    <h2>启动流程（真实项目）</h2>
+    <div class="flow">
+      <div class="step"><b>① 复位 Reset</b><span>cortex-m-rt 入口，初始化 .data/.bss，使能 FPU</span></div>
+      <div class="step"><b>② 硬件初始化</b><span>时钟（PWR/RCC）、GPIO、SysTick（1ms）</span></div>
+      <div class="step"><b>③ #[kernel::entry]</b><span>kernel::init(KernelConfig) 设置运行时配置、初始化列表</span></div>
+      <div class="step"><b>④ 创建对象 + spawn</b><span>static_*! 惰性初始化；kernel::spawn(任务)</span></div>
+      <div class="step"><b>⑤ start_scheduler</b><span>创建空闲任务 + 定时器守护任务，选出首个任务</span></div>
+      <div class="step"><b>⑥ SVC → 首任务</b><span>恢复 PSP，异常返回进入第一个任务</span></div>
+      <div class="step"><b>⑦ 调度循环</b><span>SysTick tick → PendSV → 切换最高优先级任务</span></div>
+    </div>
+  </section>
+
+  <!-- ================= 上下文切换 ================= -->
+  <section>
+    <h2>上下文切换（PendSV，最低优先级异常）</h2>
+    <div class="flow opt">
+      <div class="step"><b>进入 PendSV</b><span>mrs r0, psp；FPU 时 tst lr,#0x10 → 保存 s16-s31</span></div>
+      <div class="step"><b>保存现场</b><span>stmdb r0!, {r4-r11}；str r0 → pxCurrentTCB.top_of_stack</span></div>
+      <div class="step"><b>临界区选任务</b><span>BASEPRI=0x50 → vTaskSwitchContext：位图取最高就绪优先级，轮转同优先级</span></div>
+      <div class="step"><b>恢复现场</b><span>新任务 top_of_stack → ldmia {r4-r11}（+s16-s31）；msr psp, r0</span></div>
+      <div class="step"><b>异常返回</b><span>bx lr（EXC_RETURN=0xFFFFFFFD/ED → Thread + PSP）</span></div>
+    </div>
+    <p style="color:var(--muted);font-size:12.5px;margin:12px 0 0">
+      SysTick 异常 → <code>kernel::tick_handler()</code>：tick 计数、延时双列表到期唤醒、必要时触发 PendSV；
+      SVC 异常 → 首次启动把控制流交给第一个任务。二者由内核导出 <code>PendSV_Handler/SVC_Handler</code>（及 cortex-m-rt 短命名 <code>PendSV/SVCall</code>）。
+    </p>
+  </section>
+
+  <!-- ================= 工作区结构 ================= -->
+  <section>
+    <h2>工作区结构</h2>
+    <pre class="tree">rrtos/
+├── Cargo.toml                # 工作区（默认 target = thumbv7em-none-eabihf）
+├── .cargo/config.toml        # 构建目标 + link.x
+├── kernel/                   # 核心 crate（name = "kernel"，见上方模块图）
+│   └── src/…
+├── kcore-macro/              # 过程宏 crate（name = "kcore-macro"）
+│   └── src/lib.rs            #   #[entry] / #[task] / #[timer] / static_*!
+└── examples/
+    ├── example/              # API 用法示例：启用全部 feature，仅编译不运行
+    ├── firmware/             # 实际固件（cortex-m-rt + stm32h7 裸 PAC，仅基础内核）
+    │   ├── memory.x          #   STM32H743 内存布局（2M Flash + 128K DTCM）
+    │   ├── build.rs          #   把 memory.x 加入链接搜索路径
+    │   └── src/main.rs       #   复位入口 + 交替点亮 PC13/PA1 LED
+    └── firmware-hal/         # 同上，但用 stm32h7xx-hal（feature = "heap"，演示 alloc）</pre>
+  </section>
+
+  <!-- ================= TCB ================= -->
+  <section>
+    <h2>任务控制块 TCB（对应 FreeRTOS tskTCB）</h2>
+    <pre class="code">#[repr(C)]
+pub struct Task {
+    pub top_of_stack: *mut u32,        // ← 必须是第一个字段：PendSV/SVC 汇编直接按偏移 0 存取
+    pub state_item: ListItem,          // 就绪列表（FIFO）/ 延时列表（按唤醒时刻升序）
+    pub event_item: ListItem,          // 对象等待列表（值 = max_priorities-1-优先级 → 高优先级在前）
+    pub priority: Priority,            // 当前优先级（可能被互斥锁继承提升）
+    pub base_priority: Priority,       // 基本优先级
+    pub mutexes_held: u32,             // 持有互斥锁计数（释放归零时恢复优先级）
+    pub state: TaskState,              // Running / Ready / Blocked / Suspended / Deleted
+    pub stack_base: *mut u8,
+    pub stack_size: usize,
+    pub entry: EntryFn,                // unsafe extern "C" fn(*mut ()) -> !
+    pub param: *mut (),
+    pub name: &'static str,
+    pub blocked_on: *mut (),           // 互斥锁优先级继承链
+    #[cfg(feature = "task-notification")]
+    pub notification: u32,             // 任务通知值
+    #[cfg(feature = "task-notification")]
+    pub notify_waiting: bool,
+}</pre>
+    <p style="color:var(--muted);font-size:12.5px;margin:12px 0 0">
+      <code>#[kernel::task]</code> 生成：静态栈（<code>#[repr(align(8))]</code>）+ 静态 TCB + 入口包装 +
+      同名构造器（返回未调度的 <code>TaskHandle</code>），再经 <code>kernel::spawn</code> 加入就绪列表。
+    </p>
+  </section>
+
+  <!-- ================= 特性表 ================= -->
+  <section class="opt">
+    <h2>Feature 隔离（默认仅基础内核）</h2>
+    <table>
+      <thead><tr><th>范围</th><th>Cargo feature</th><th>模块</th><th>对应 FreeRTOS</th></tr></thead>
+      <tbody>
+        <tr><td><span class="feat-tag base">默认</span></td><td>—</td><td>scheduler / task / queue / semaphore / mutex / event_group / timer</td><td>tasks.c / queue.c / semphr.h / event_groups.c / timers.c</td></tr>
+        <tr><td><span class="feat-tag base">默认</span></td><td><code>fpu</code></td><td>port（FPU 扩展异常帧）</td><td>port.c（Cortex-M7）</td></tr>
+        <tr><td><span class="feat-tag opt">可选</span></td><td><code>heap</code></td><td>heap（kmalloc/kfree + #[global_allocator] 桥）</td><td>heap_4.c</td></tr>
+        <tr><td><span class="feat-tag opt">可选</span></td><td><code>task-notification</code></td><td>notification</td><td>task.h xTaskNotify*</td></tr>
+        <tr><td><span class="feat-tag opt">可选</span></td><td><code>stream-buffer</code></td><td>stream_buffer（流 + 消息缓冲）</td><td>stream_buffer.c</td></tr>
+        <tr><td><span class="feat-tag opt">可选</span></td><td><code>coroutine</code></td><td>coroutine（空闲任务驱动）</td><td>croutine.h</td></tr>
+        <tr><td><span class="feat-tag opt">可选</span></td><td><code>mpu</code></td><td>mpu（Cortex-M7 MPU 寄存器抽象）</td><td>MPU 端口</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--muted);font-size:12.5px;margin:12px 0 0">
+      启用：<code>kernel = { path = "../kernel", features = ["heap", "mpu"] }</code>（按需组合）；
+      <code>default-features = false</code> 可关闭 <code>fpu</code>。
+    </p>
+  </section>
+
+  <footer>rrtos 结构框架图 · 由源码自动梳理生成 · 点击节点查看模块职责</footer>
+</div>
+
+<script>
+(function () {
+  // ------------------------------------------------------------------
+  // 模块数据
+  // ------------------------------------------------------------------
+  const nodes = [
+    // ---- 基础（默认编译）----
+    { id: 'config',  en: 'config',  cn: '内核配置',   kind: 'base', cx: 110, cy: 60,  w: 150,
+      desc: '运行时 KernelConfig（tick_rate_hz / max_priorities / max_tasks，由 #[kernel::entry(...)] 设置）与编译期常量（MAX_PRIORITIES=32 上限、BASEPRI 值等）。对应 FreeRTOSConfig.h。' },
+    { id: 'list',    en: 'list',    cn: '双向链表',   kind: 'base', cx: 330, cy: 60,  w: 150,
+      desc: 'ListItem / List：按 item_value 升序插入（延时列表=唤醒时刻）、末尾 FIFO 插入（就绪列表）+ pxIndex 轮转。对应 list.h / list.c。' },
+    { id: 'port',    en: 'port',    cn: 'Cortex-M 端口', kind: 'base', cx: 550, cy: 60, w: 150,
+      desc: '硬件层：异常帧（FPU 扩展帧 104B）、BASEPRI 临界区、PendSV/SVC 汇编、首任务启动。仅面向 STM32H7 (Cortex-M7)。对应 port.c。' },
+    { id: 'scheduler', en: 'scheduler', cn: '优先级调度器', kind: 'base', cx: 330, cy: 175, w: 150,
+      desc: '调度核心：每优先级一个就绪列表 + uxTopReadyPriority 位图 O(1) 选最高优先级；同优先级时间片轮转；延时双列表处理 tick 回绕；TimeOut 超时检查。对应 tasks.c 调度部分。' },
+    { id: 'task',    en: 'task',    cn: '任务 (TCB)', kind: 'base', cx: 330, cy: 285, w: 150,
+      desc: 'TCB 与任务生命周期：task_create（不调度）/ spawn / delay / suspend / resume / delete / 优先级修改。对应 task.h。' },
+    { id: 'queue',   en: 'queue',   cn: '消息队列',   kind: 'base', cx: 150, cy: 395, w: 150,
+      desc: '环形缓冲 + 阻塞/超时 + 发送/接收等待列表，含 *_from_isr 版本。同时是信号量/互斥锁的底层实现。对应 queue.c。' },
+    { id: 'timer',   en: 'timer',   cn: '软件定时器', kind: 'base', cx: 510, cy: 395, w: 150,
+      desc: '定时器守护任务维护按到期时刻排序的激活列表；start/stop/reset 经命令队列投递（ISR 安全）。对应 timers.c。' },
+    { id: 'semaphore', en: 'semaphore', cn: '二值/计数信号量', kind: 'base', cx: 95, cy: 505, w: 150,
+      desc: '以“项大小为 0 的队列”实现二值与计数信号量。对应 semphr.h。' },
+    { id: 'mutex',   en: 'mutex',   cn: '互斥锁',     kind: 'base', cx: 255, cy: 505, w: 150,
+      desc: '互斥量 + 优先级继承：高优先级任务阻塞时沿互斥锁链递归提升持有者优先级。' },
+    { id: 'event_group', en: 'event_group', cn: '事件组', kind: 'base', cx: 415, cy: 505, w: 150,
+      desc: '24 位事件位：OR/AND 等待、退出清位、set_bits_from_isr。对应 event_groups.c。' },
+
+    // ---- 可选（feature 条件编译）----
+    { id: 'heap',    en: 'heap',    cn: '内存管理',   kind: 'opt', feat: 'heap', cx: 700, cy: 285, w: 180,
+      desc: 'kmalloc/kfree（首次适配 + 相邻空闲块合并）+ KernelAllocator 实现 GlobalAlloc → 注册后可用 Vec/String/Box。feature = "heap"。' },
+    { id: 'notification', en: 'notification', cn: '任务通知', kind: 'opt', feat: 'task-notification', cx: 700, cy: 395, w: 180,
+      desc: '每任务 32 位通知值：notify_give（计数）/ set_bits / overwrite / take / wait，含 ISR 版本。feature = "task-notification"。' },
+    { id: 'stream_buffer', en: 'stream_buffer', cn: '流/消息缓冲', kind: 'opt', feat: 'stream-buffer', cx: 700, cy: 505, w: 180,
+      desc: '字节流缓冲（触发级别）+ 消息缓冲（4 字节长度头，可跨调用读完一条消息），阻塞收发 + ISR 版本。feature = "stream-buffer"。' },
+    { id: 'coroutine', en: 'coroutine', cn: '协程',     kind: 'opt', feat: 'coroutine', cx: 700, cy: 615, w: 180,
+      desc: '显式状态机协程：优先级就绪列表 + 延时列表，空闲任务协作调度；含协程队列。feature = "coroutine"。' },
+    { id: 'mpu',     en: 'mpu',     cn: 'MPU 保护',   kind: 'opt', feat: 'mpu', cx: 700, cy: 725, w: 180,
+      desc: 'Cortex-M7 MPU 寄存器抽象：区域配置（AP 权限 / TEX·S·C·B 属性 / SIZE 编码）、使能/禁用。feature = "mpu"。' },
+
+    // ---- 过程宏 crate ----
+    { id: 'kcore-macro', en: 'kcore-macro', cn: '过程宏 crate', kind: 'proc', cx: 700, cy: 175, w: 180,
+      desc: '独立 proc-macro crate，经 kernel 再导出：#[kernel::entry]（核心初始化 + 可选配置参数）、#[kernel::task] / #[kernel::timer]、static_queue! / static_mutex! / static_semaphore! / static_event_group! / static_stream_buffer! / static_message_buffer!。' },
+  ];
+
+  // 有向边：{ from, to, d, kind }
+  const edges = [
+    // 基础依赖（实线）
+    { from: 'config',      to: 'scheduler', d: 'M110,84 C110,130 260,130 260,151',        kind: 'solid' },
+    { from: 'list',        to: 'scheduler', d: 'M330,84 L330,151',                        kind: 'solid' },
+    { from: 'port',        to: 'scheduler', d: 'M550,84 C550,130 400,130 400,151',        kind: 'solid' },
+    { from: 'scheduler',   to: 'task',      d: 'M330,199 L330,261',                       kind: 'solid' },
+    { from: 'task',        to: 'queue',     d: 'M255,285 C200,285 170,330 160,371',       kind: 'solid' },
+    { from: 'task',        to: 'timer',     d: 'M405,285 C460,285 490,330 500,371',       kind: 'solid' },
+    { from: 'queue',       to: 'timer',     d: 'M225,395 L435,395',                       kind: 'solid' },
+    { from: 'queue',       to: 'semaphore', d: 'M120,419 C120,450 105,455 100,481',       kind: 'solid' },
+    { from: 'queue',       to: 'mutex',     d: 'M175,419 C200,450 240,455 248,481',       kind: 'solid' },
+    { from: 'scheduler',   to: 'event_group', d: 'M405,199 C490,230 490,450 430,481',     kind: 'solid' },
+    // 可选依赖（虚线）
+    { from: 'task',        to: 'notification', d: 'M405,285 C540,290 620,320 625,371',     kind: 'opt' },
+    { from: 'scheduler',   to: 'notification', d: 'M405,199 C580,199 700,280 705,371',     kind: 'opt' },
+    { from: 'scheduler',   to: 'stream_buffer', d: 'M405,199 C600,230 690,380 700,481',    kind: 'opt' },
+    { from: 'scheduler',   to: 'coroutine',     d: 'M405,199 C620,240 690,480 700,591',    kind: 'opt' },
+    // 过程宏生成（虚线紫）
+    { from: 'kcore-macro', to: 'task',  d: 'M615,175 C540,175 470,240 415,280', kind: 'proc' },
+    { from: 'kcore-macro', to: 'timer', d: 'M700,199 C700,280 620,320 570,371', kind: 'proc' },
+  ];
+
+  // 特性高亮：与该特性相关的节点集合
+  const featRel = {
+    'heap':               ['heap'],
+    'task-notification':  ['notification', 'task', 'scheduler'],
+    'stream-buffer':      ['stream_buffer', 'scheduler'],
+    'coroutine':          ['coroutine', 'scheduler'],
+    'mpu':                ['mpu'],
+  };
+
+  // ------------------------------------------------------------------
+  // 渲染
+  // ------------------------------------------------------------------
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('graph');
+  const desc = document.getElementById('desc');
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  // markers
+  const defs = document.createElementNS(NS, 'defs');
+  [
+    ['arrow', '#90a4c8'],
+    ['arrow-opt', '#f0b380'],
+    ['arrow-proc', '#b9a5e8'],
+  ].forEach(([id, color]) => {
+    const m = document.createElementNS(NS, 'marker');
+    m.setAttribute('id', id);
+    m.setAttribute('viewBox', '0 0 10 10');
+    m.setAttribute('refX', '9'); m.setAttribute('refY', '5');
+    m.setAttribute('markerWidth', '7'); m.setAttribute('markerHeight', '7');
+    m.setAttribute('orient', 'auto-start-reverse');
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', 'M0,0 L10,5 L0,10 z');
+    p.setAttribute('fill', color);
+    m.appendChild(p);
+    defs.appendChild(m);
+  });
+  svg.appendChild(defs);
+
+  // edges
+  const edgeEls = edges.map(e => {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', e.d);
+    p.setAttribute('class', 'edge ' + e.kind);
+    p.setAttribute('marker-end', 'url(#arrow' + (e.kind === 'solid' ? '' : '-' + e.kind) + ')');
+    p.dataset.from = e.from;
+    p.dataset.to = e.to;
+    p.dataset.kind = e.kind;
+    svg.appendChild(p);
+    return p;
+  });
+
+  // nodes
+  const nodeEls = nodes.map(n => {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'node ' + n.kind);
+    g.setAttribute('transform', 'translate(' + n.cx + ',' + n.cy + ')');
+    g.dataset.id = n.id;
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', -n.w / 2); r.setAttribute('y', -24);
+    r.setAttribute('width', n.w); r.setAttribute('height', 48);
+    const en = document.createElementNS(NS, 'text');
+    en.setAttribute('class', 'en'); en.setAttribute('x', 0); en.setAttribute('y', -8);
+    en.setAttribute('text-anchor', 'middle'); en.textContent = n.en;
+    const cn = document.createElementNS(NS, 'text');
+    cn.setAttribute('class', 'cn'); cn.setAttribute('x', 0); cn.setAttribute('y', 12);
+    cn.setAttribute('text-anchor', 'middle'); cn.textContent = n.cn;
+    g.appendChild(r); g.appendChild(en); g.appendChild(cn);
+    g.addEventListener('click', () => select(n.id));
+    g.addEventListener('mouseenter', () => showDesc(n.id));
+    svg.appendChild(g);
+    return g;
+  });
+
+  const nodeEl = Object.fromEntries(nodeEls.map((el, i) => [nodes[i].id, el]));
+
+  function showDesc(id) {
+    const n = byId[id];
+    if (!n) return;
+    const tag = n.kind === 'base'
+      ? '<span class="tag base">基础 · 默认编译</span>'
+      : n.kind === 'opt'
+        ? '<span class="tag opt">可选 · feature = "' + n.feat + '"</span>'
+        : '<span class="tag proc">过程宏 crate</span>';
+    desc.innerHTML = '<span class="t">' + n.en + '</span> — ' + n.cn + tag + '<br>' + n.desc;
+  }
+
+  let mode = 'all';
+  function applyMode() {
+    let related = null;
+    if (mode.startsWith('feature:')) related = featRel[mode.slice(8)] || [];
+
+    nodes.forEach(n => {
+      const el = nodeEl[n.id];
+      let dim = false;
+      if (mode === 'base') dim = n.kind !== 'base';
+      else if (related) dim = !related.includes(n.id);
+      el.classList.toggle('dim', dim);
+    });
+
+    edgeEls.forEach(p => {
+      const from = p.dataset.from, to = p.dataset.to;
+      let dim = false;
+      if (mode === 'base') dim = p.dataset.kind !== 'solid';
+      else if (related) dim = !related.includes(from) || !related.includes(to);
+      p.classList.toggle('dim', dim);
+      p.classList.remove('hl');
+    });
+  }
+
+  function select(id) {
+    // 高亮与该节点相连的边
+    edgeEls.forEach(p => {
+      p.classList.toggle('hl', p.dataset.from === id || p.dataset.to === id);
+    });
+    nodeEls.forEach(el => el.classList.toggle('sel', el.dataset.id === id));
+    showDesc(id);
+  }
+
+  document.querySelectorAll('button.chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('button.chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      mode = btn.dataset.mode;
+      nodeEls.forEach(el => el.classList.remove('sel'));
+      applyMode();
+      desc.textContent = '点击左侧任意模块查看详细说明。';
+    });
+  });
+
+  applyMode();
+})();
+</script>
+</body>
+</html>

@@ -87,11 +87,10 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     // ---- 校验 extern "C" ----
-    let abi = func
-        .sig
-        .abi
-        .as_ref()
-        .ok_or_else(|| syn::Error::new_spanned(&func.sig, "#[task] 函数必须声明 `extern \"C\"`"))?;
+    let abi =
+        func.sig.abi.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(&func.sig, "#[task] 函数必须声明 `extern \"C\"`")
+        })?;
     let abi_name = abi
         .name
         .as_ref()
@@ -157,7 +156,7 @@ fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::Token
     let fn_name = &func.sig.ident;
     let raw_name = format_ident!("__task_{}__", fn_name);
     let entry_name = format_ident!("__task_entry_{}__", fn_name);
-    let stack_ty_name = format_ident!("__TaskStack{}__", fn_name);
+    let stack_ty_name = format_ident!("__TaskStack_{}__", fn_name);
     let stack_static = format_ident!("__TASK_STACK_{}__", fn_name);
     let tcb_static = format_ident!("__TASK_TCB_{}__", fn_name);
 
@@ -293,7 +292,10 @@ impl Parse for TimerArgs {
             ));
         }
 
-        Ok(TimerArgs { period, auto_reload })
+        Ok(TimerArgs {
+            period,
+            auto_reload,
+        })
     }
 }
 
@@ -519,9 +521,8 @@ fn expand_entry(args: &EntryArgs, func: &ItemFn) -> syn::Result<proc_macro2::Tok
     let block = &func.block;
 
     // 配置初始化语句：有宏参数时覆盖默认值，否则直接用默认配置
-    let has_args = args.tick_rate_hz.is_some()
-        || args.max_priorities.is_some()
-        || args.max_tasks.is_some();
+    let has_args =
+        args.tick_rate_hz.is_some() || args.max_priorities.is_some() || args.max_tasks.is_some();
     let config_stmts = if !has_args {
         quote! {
             ::kernel::init(::kernel::KernelConfig::default());
@@ -796,7 +797,11 @@ impl Parse for StaticStreamBufferArgs {
         if !input.is_empty() {
             return Err(input.error("参数过多：应为 `名称, 字节数[, 触发级别]`"));
         }
-        Ok(Self { name, size, trigger })
+        Ok(Self {
+            name,
+            size,
+            trigger,
+        })
     }
 }
 

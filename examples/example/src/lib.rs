@@ -152,10 +152,7 @@ fn producer_co(co: &mut kernel::CoRoutine) {
     match co.step {
         0 => {
             let mut val: u32 = 0xAA;
-            if kernel::co_queue_send(
-                ptr::addr_of_mut!(CO_QUEUE),
-                (&raw mut val) as *const u8,
-            ) {
+            if kernel::co_queue_send(ptr::addr_of_mut!(CO_QUEUE), (&raw mut val) as *const u8) {
                 co.step = 1;
             }
             co.delay(100);
@@ -233,7 +230,7 @@ pub extern "C" fn blink(_id: *mut ()) {
 /// 内核入口：默认配置。也可用宏参数定制，例如：
 /// `#[kernel::entry(tick_rate_hz = 2000, max_priorities = 12)]`
 #[kernel::entry]
-pub fn main() {
+pub fn setup() {
     // 1) 内存管理：初始化静态堆
     unsafe {
         kernel::heap_init(ptr::addr_of_mut!(HEAP) as *mut u8, 16 * 1024);

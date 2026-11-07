@@ -11,7 +11,7 @@ rrtos/
 ├── .cargo/config.toml    # 默认构建目标 STM32H7
 ├── kernel/               # 核心 crate（name = "kernel"）
 │   └── src/
-│       ├── lib.rs        # 公共 API 汇总
+│       ├── lib.rs        # 公共 API 汇总（含 feature 条件编译与再导出）
 │       ├── config.rs     # 内核配置常量（对应 FreeRTOSConfig.h）
 │       ├── list.rs       # 双向链表（对应 list.h/list.c）
 │       ├── port.rs       # Cortex-M 端口：异常帧、临界区、PendSV/SVC/SysTick 汇编
@@ -22,22 +22,24 @@ rrtos/
 │       ├── mutex.rs      # 互斥锁 + 优先级继承（对应 semphr.h 互斥量）
 │       ├── event_group.rs# 事件组（对应 event_groups.c）
 │       ├── timer.rs      # 软件定时器（对应 timers.c）
-│       ├── heap.rs       # 内存管理（对应 heap_4.c：kmalloc/kfree）
-│       ├── notification.rs # 任务通知（对应 task.h xTaskNotify*）
-│       ├── stream_buffer.rs # 流/消息缓冲（对应 stream_buffer.c）
-│       ├── coroutine.rs  # 协程（对应 croutine.h）
-│       └── mpu.rs        # MPU 保护（Cortex-M7 MPU 寄存器抽象）
+│       ├── heap.rs       # 内存管理（对应 heap_4.c，feature = "heap"）
+│       ├── notification.rs # 任务通知（对应 task.h xTaskNotify*，feature = "task-notification"）
+│       ├── stream_buffer.rs # 流/消息缓冲（对应 stream_buffer.c，feature = "stream-buffer"）
+│       ├── coroutine.rs  # 协程（对应 croutine.h，feature = "coroutine"）
+│       └── mpu.rs        # MPU 保护（Cortex-M7 MPU 寄存器抽象，feature = "mpu"）
 ├── kcore-macro/          # 过程宏 crate（name = "kcore-macro"）
 │   └── src/lib.rs        # #[entry]、#[task]、#[timer] 与 static_*!（经 kernel 再导出）
-├── example/              # API 用法示例（覆盖全部特性，仅编译不运行）
-├── firmware/             # 实际项目启动示例（cortex-m-rt + stm32h7 裸 PAC）
-│   ├── memory.x          # STM32H743 内存布局
-│   ├── build.rs          # 把 memory.x 加入链接搜索路径
-│   └── src/main.rs       # 复位入口 + 交替点亮 PC13/PA1 LED
-└── firmware-hal/         # 同上，但用 stm32h7xx-hal 高层 API（PWR/RCC/GPIO 类型安全引脚）
-    ├── memory.x
-    ├── build.rs
-    └── src/main.rs       # 把 GPIO 引脚所有权作为任务参数移入任务
+└── examples/             # 全部示例（package 名与目录名相同）
+    ├── example/          # API 用法示例（启用全部 feature，仅编译不运行）
+    │   └── src/lib.rs
+    ├── firmware/         # 实际项目启动示例（cortex-m-rt + stm32h7 裸 PAC，仅基础内核）
+    │   ├── memory.x      # STM32H743 内存布局
+    │   ├── build.rs      # 把 memory.x 加入链接搜索路径
+    │   └── src/main.rs   # 复位入口 + 交替点亮 PC13/PA1 LED
+    └── firmware-hal/     # 同上，但用 stm32h7xx-hal 高层 API（feature = "heap"）
+        ├── memory.x
+        ├── build.rs
+        └── src/main.rs   # 把 GPIO 引脚所有权作为任务参数移入任务
 ```
 
 ## 已实现特性
@@ -172,7 +174,7 @@ pub fn main() {
 ## 实际项目启动（cortex-m-rt）
 
 真实工程用 `#[cortex_m_rt::entry]` 作为复位入口，硬件初始化后再交给
-`#[kernel::entry]`。见 `firmware/` 示例（交替点亮 PC13/PA1 两个低电平 LED）：
+`#[kernel::entry]`。见 `examples/firmware/` 示例（交替点亮 PC13/PA1 两个低电平 LED）：
 
 ```rust
 #![no_std]
@@ -219,13 +221,13 @@ fn SysTick() {
 
 - `PendSV`/`SVC` 处理器由内核提供（导出 `PendSV_Handler`/`SVC_Handler`，
   并额外提供 `PendSV`/`SVCall` 短命名别名，兼容 cortex-m-rt 0.7 的向量表）；
-- 需要 `memory.x`（见 `firmware/memory.x`）与 `build.rs` 把其加入链接路径，
+- 需要 `memory.x`（见 `examples/firmware/memory.x`）与 `build.rs` 把其加入链接路径，
   并在 `.cargo/config.toml` 里加 `rustflags = ["-C", "link-arg=-Tlink.x"]`；
 - 系统时钟默认按 HSI 64 MHz 计算 SysTick，若配置了 PLL 请修改 `SYSTEM_CLOCK_HZ`。
 
 ### HAL 版本（firmware-hal）
 
-`firmware-hal/` 提供等价的 `stm32h7xx-hal` 实现，差异点：
+`examples/firmware-hal/` 提供等价的 `stm32h7xx-hal` 实现，差异点：
 
 - 用高层时钟/GPIO API：`dp.PWR.constrain()`、`dp.RCC.constrain()` + `sys_ck(100.MHz())`、
   `dp.GPIOC.split(...)` + `into_push_pull_output()`；
@@ -262,7 +264,7 @@ fn reset() -> ! {
 ## 高级特性用法
 
 > 需在依赖中启用对应 feature（`heap`/`task-notification`/`stream-buffer`/`coroutine`/`mpu`），
-> 见上表。`example` 启用了全部特性。
+> 见上表。`examples/example` 启用了全部特性。
 
 ```rust
 // 1) 内存管理：静态堆 + kmalloc/kfree（对应 heap_4）
@@ -318,7 +320,7 @@ kernel::mpu_configure_region(0, &kernel::MpuRegion {
 kernel::mpu_enable(true, false);
 ```
 
-完整示例见 `example/src/lib.rs`（一次性覆盖全部特性）。
+完整示例见 `examples/example/src/lib.rs`（一次性覆盖全部特性）。
 
 ## 构建
 

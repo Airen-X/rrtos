@@ -1,6 +1,6 @@
 //! STM32H7 实际项目启动示例（stm32h7xx-hal 版本）。
 //!
-//! 功能与 `firmware/` 相同：交替点亮 PC13 与 PA1 两个低电平 LED。
+//! 功能与 `examples/firmware/` 相同：交替点亮 PC13 与 PA1 两个低电平 LED。
 //! 区别在于使用 stm32h7xx-hal 的高层 API（PWR/RCC 时钟树、GPIO 类型安全引脚），
 //! 并把 GPIO 引脚的“所有权”作为任务参数移动进任务（演示非 Copy 参数）。
 

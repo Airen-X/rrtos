@@ -113,6 +113,11 @@ pub unsafe fn task_create(
     unsafe {
         scheduler::ensure_lists_initialised();
 
+        // 先用图案填充整块任务栈（供高水位检测）。
+        // 注意：`#[task]` 宏生成的任务参数在 task_create 之后才写入参数区，
+        // 因此这里填充不会覆盖参数。
+        mark_task_stack(stack, size);
+
         let sp = port::init_task_stack(stack, size, entry, param);
 
         let t = &mut *tcb;
@@ -259,9 +264,52 @@ pub fn task_delete(handle: TaskHandle) {
     }
 }
 
-/// 返回当前架构下异常帧的大小（供 `#[task]` 宏计算参数区）。
-pub fn frame_size() -> usize {
-    core::mem::size_of::<crate::port::Frame>()
+/// 返回任务栈头保留字节数（r4-r11 + EXC_RETURN + 异常帧 = 68），
+/// 供 `#[task]` 宏计算参数区（参数放在栈头下方）。
+pub fn task_stack_header_size() -> usize {
+    crate::port::STACK_HEADER_SIZE
+}
+
+/// 任务栈填充图案（0xE7，创建任务时写入整块栈）。
+const STACK_FILL: u32 = 0xE7E7_E7E7;
+
+/// 用 [`STACK_FILL`] 图案填充任务栈（供高水位检测；`task_create` 会自动调用）。
+///
+/// # Safety
+/// `stack` 必须指向至少 `size` 字节的可写内存。
+pub unsafe fn mark_task_stack(stack: *mut u8, size: usize) {
+    unsafe {
+        let words = size / 4;
+        let p = stack as *mut u32;
+        for i in 0..words {
+            p.add(i).write_volatile(STACK_FILL);
+        }
+    }
+}
+
+/// 返回任务栈“最小剩余”字节数（栈底向上连续未被覆盖的字节）。
+///
+/// 任务创建时整块栈被填充为 0xE7，运行时栈向下生长会覆盖图案，
+/// 从栈底向上扫描第一个非图案字节即为历史最深水位。
+pub fn task_stack_free(handle: TaskHandle) -> usize {
+    unsafe {
+        let t = &*handle;
+        let words = t.stack_size / 4;
+        let p = t.stack_base as *const u32;
+        let mut free = 0usize;
+        for i in 0..words {
+            if p.add(i).read_volatile() != STACK_FILL {
+                break;
+            }
+            free += 4;
+        }
+        free
+    }
+}
+
+/// 返回任务栈历史最大已用字节数（高水位）。
+pub fn task_stack_used(handle: TaskHandle) -> usize {
+    unsafe { (*handle).stack_size - task_stack_free(handle) }
 }
 
 /// 从参数指针“移动”取出实参（供 `#[task]` 宏生成的任务入口使用）。

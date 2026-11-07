@@ -177,25 +177,34 @@ fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::Token
         }
     };
 
-    // ---- 构造器中参数的写入（参数“移动”进任务自己的栈，支持非 Copy 类型）----
-    let param_init = if arg_idents.is_empty() {
-        quote! { let __param: *mut () = ::core::ptr::null_mut(); }
+    // ---- 构造器：参数区计算 + task_create + 参数写入 ----
+    // task_create 会用 0xE7 图案填充整块任务栈（高水位检测），
+    // 因此参数值必须在 task_create 之后写入参数区。
+    let (param_setup, param_write) = if arg_idents.is_empty() {
+        (
+            quote! { let __param: *mut () = ::core::ptr::null_mut(); },
+            quote! {},
+        )
     } else {
         let id = &arg_idents[0];
         let ty = &arg_tys[0];
-        quote! {
-            let __frame_size = ::kernel::frame_size();
-            // 异常帧起始地址（8 字节对齐，与内核 init_task_stack 一致）
-            let __frame_addr =
-                ((__stack_base as usize + __stack_size - __frame_size) & !0b111usize) as *mut u8;
-            // 参数放在帧下方（低地址侧），按参数类型对齐，避免与异常帧重叠
-            let __param_addr = ((__frame_addr as usize - ::core::mem::size_of::<#ty>())
-                & !(::core::mem::align_of::<#ty>() - 1)) as *mut u8;
-            ::core::debug_assert!((__param_addr as usize) >= (__stack_base as usize));
-            let __param_slot = __param_addr as *mut #ty;
-            ::core::ptr::write(__param_slot, #id);
-            let __param = __param_slot as *mut ();
-        }
+        (
+            quote! {
+                let __frame_size = ::kernel::task_stack_header_size();
+                // 栈头基址（r4-r11 保存区，8 字节对齐）
+                let __frame_addr =
+                    ((__stack_base as usize + __stack_size - __frame_size) & !0b111usize) as *mut u8;
+                // 参数放在栈头下方（低地址侧），按参数类型对齐
+                let __param_addr = ((__frame_addr as usize - ::core::mem::size_of::<#ty>())
+                    & !(::core::mem::align_of::<#ty>() - 1)) as *mut u8;
+                ::core::debug_assert!((__param_addr as usize) >= (__stack_base as usize));
+                let __param = __param_addr as *mut ();
+            },
+            quote! {
+                let __param_slot = __param_addr as *mut #ty;
+                ::core::ptr::write(__param_slot, #id);
+            },
+        )
     };
 
     let expanded = quote! {
@@ -230,9 +239,9 @@ fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::Token
                 let __stack_base = ::core::ptr::addr_of_mut!(#stack_static) as *mut u8;
                 let __stack_size = #stack_size;
 
-                #param_init
+                #param_setup
 
-                ::kernel::task_create(
+                let __handle = ::kernel::task_create(
                     ::core::ptr::addr_of_mut!(#tcb_static),
                     #entry_name,
                     stringify!(#fn_name),
@@ -240,7 +249,11 @@ fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::Token
                     __stack_size,
                     __param,
                     #priority,
-                )
+                );
+
+                #param_write
+
+                __handle
             }
         }
     };

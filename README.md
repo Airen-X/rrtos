@@ -322,6 +322,19 @@ kernel::mpu_enable(true, false);
 
 完整示例见 `examples/example/src/lib.rs`（一次性覆盖全部特性）。
 
+## 栈溢出排查
+
+任务创建时整块栈被填充为 `0xE7`，可用高水位 API 检查历史最大用量：
+
+```rust
+let used = kernel::task_stack_used(handle); // 历史最大已用字节
+let free = kernel::task_stack_free(handle); // 最小剩余字节（越接近 0 越危险）
+```
+
+可用栈预算 = `stack` 参数 - 68 字节栈头 - 任务参数结构体大小。
+带外设驱动（SPI/显示等）的任务建议 `stack >= 2048`，剩余越少越应加大。
+典型溢出症状：Escalated BusFault（Imprecise data access）——写穿栈区进入未映射内存。
+
 ## 构建
 
 ```bash

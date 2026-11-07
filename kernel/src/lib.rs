@@ -51,9 +51,9 @@ pub mod mpu;
 pub use config::{KernelConfig, Priority, TaskHandle, TickType, INFINITE};
 pub use port::{enter_critical, exit_critical};
 pub use task::{
-    EntryFn, Task, TaskState, current_task, frame_size, load_param, spawn, task_count, task_create,
-    task_delete, task_delay, task_get_priority, task_resume, task_set_priority, task_suspend,
-    task_yield,
+    EntryFn, Task, TaskState, current_task, load_param, mark_task_stack, spawn, task_count,
+    task_create, task_delete, task_delay, task_get_priority, task_resume, task_set_priority,
+    task_stack_free, task_stack_header_size, task_stack_used, task_suspend, task_yield,
 };
 pub use scheduler::{init, max_priorities, max_tasks, start_scheduler, tick_handler, tick_rate_hz};
 pub use queue::{

@@ -1,0 +1,12 @@
+[package]
+name = "firmware"
+version = "0.1.0"
+edition = "2024"
+description = "STM32H7 实际项目启动示例：cortex-m-rt + rrtos，交替点亮 PC13/PA1 LED"
+
+[dependencies]
+kernel = { path = "../../kernel" }
+cortex-m-rt = "0.7.6"
+stm32h7 = { version = "0.15.1", features = [
+    "stm32h743",
+], default-features = false }

@@ -1,0 +1,6 @@
+/* STM32H743 (Nucleo-H743ZI 等常见开发板) 内存布局。 */
+MEMORY
+{
+    FLASH : ORIGIN = 0x08000000, LENGTH = 2M
+    RAM   : ORIGIN = 0x20000000, LENGTH = 128K
+}

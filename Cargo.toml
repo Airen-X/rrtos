@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+    "kcore-macro",
+    "examples/example",
+    "examples/firmware-hal",
+    "examples/firmware",
+]

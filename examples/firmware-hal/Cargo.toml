@@ -1,0 +1,14 @@
+[package]
+name = "firmware-hal"
+version = "0.1.0"
+edition = "2024"
+description = "STM32H7 实际项目启动示例（stm32h7xx-hal 版本）：cortex-m-rt + rrtos，交替点亮 PC13/PA1 LED"
+
+[dependencies]
+# 使用了 alloc（Vec/String）演示，需启用 heap 特性
+kernel = { path = "../../kernel", features = ["heap"] }
+cortex-m = "0.7"
+cortex-m-rt = "0.7.6"
+stm32h7xx-hal = { version = "0.16.0", features = [
+    "stm32h743",
+], default-features = false }

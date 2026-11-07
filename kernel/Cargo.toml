@@ -1,0 +1,27 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+description = "rrtos 精简内核：面向 STM32H7 (Cortex-M7) 的优先级抢占调度器"
+
+[features]
+# 基础内核（默认启用）：调度器、任务、队列、互斥锁、信号量、事件组、软件定时器
+default = ["fpu"]
+
+# 启用 Cortex-M FPU 扩展异常帧（STM32H7 必须开启）
+fpu = []
+
+# ---- 高级特性（可选，按需启用）----
+# 内存管理：kmalloc/kfree + #[global_allocator] 桥（use_alloc!）
+heap = []
+# 任务通知：notify_give/notify_take/notify_wait 等
+task-notification = []
+# 流缓冲 + 消息缓冲
+stream-buffer = []
+# 协程（空闲任务驱动）
+coroutine = []
+# MPU 保护（Cortex-M7 MPU 寄存器抽象）
+mpu = []
+
+[dependencies]
+kcore-macro = { path = "../kcore-macro" }

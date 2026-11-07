@@ -1,0 +1,14 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# 示例演示全部高级特性，因此启用所有可选 feature
+kernel = { path = "../../kernel", features = [
+    "heap",
+    "task-notification",
+    "stream-buffer",
+    "coroutine",
+    "mpu",
+] }

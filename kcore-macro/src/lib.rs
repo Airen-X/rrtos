@@ -68,9 +68,9 @@ impl Parse for TaskArgs {
 
 /// 标记任务，自动建立栈、TCB 与入口包装。
 ///
-/// - 函数必须为 `extern "C"`，返回 `!`，支持 0 或 1 个参数；
+/// - 函数返回 `!`，支持 0 或 1 个参数（普通 `fn` 即可，无需 `extern "C"`）；
 /// - `stack` 为任务栈字节数（默认 512，最小 128）；
-/// - `priority` 为任务优先级（默认 1，范围 0..7，越大越高）。
+/// - `priority` 为任务优先级（默认 1，范围 0..32，越大越高）。
 ///
 /// 参数**无需 `Copy`**：构造器会把实参按值“移动”进任务自己的栈，
 /// 任务入口再移动取出，因此可传递拥有外设所有权的结构体。
@@ -86,21 +86,9 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn expand_task(args: &TaskArgs, func: &ItemFn) -> syn::Result<proc_macro2::TokenStream> {
-    // ---- 校验 extern "C" ----
-    let abi =
-        func.sig.abi.as_ref().ok_or_else(|| {
-            syn::Error::new_spanned(&func.sig, "#[task] 函数必须声明 `extern \"C\"`")
-        })?;
-    let abi_name = abi
-        .name
-        .as_ref()
-        .ok_or_else(|| syn::Error::new_spanned(abi, "缺少 ABI 名称"))?;
-    if abi_name.value() != "C" {
-        return Err(syn::Error::new_spanned(
-            abi_name,
-            "#[task] 仅支持 `extern \"C\"`",
-        ));
-    }
+    // 注：不再要求用户函数声明 `extern "C"`。
+    // 宏内部始终生成：普通 Rust ABI 的原函数 + `extern "C" fn(*mut ())` 的入口包装，
+    // 因此用户写 `fn` 或 `extern "C" fn` 均可。
 
     // ---- 校验返回 `!` ----
     match &func.sig.output {

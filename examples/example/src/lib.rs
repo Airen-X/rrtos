@@ -42,7 +42,7 @@ static mut HEAP: [u8; 16 * 1024] = [0; 16 * 1024];
 
 /// 演示堆分配/释放的任务：同时展示 kmalloc/kfree 与 Rust 原生 alloc（Vec/String/Box）。
 #[kernel::task(stack = 4096, priority = 1)]
-pub extern "C" fn heap_task(_arg: u32) -> ! {
+pub fn heap_task(_arg: u32) -> ! {
     kernel::task_delay(100); // 等堆初始化完成
     loop {
         // 1) C 风格：kmalloc / kfree
@@ -80,7 +80,7 @@ static mut NOTIFY_TASK_HANDLE: kernel::TaskHandle = ptr::null_mut();
 
 /// 等待通知的任务（每次被通知后处理一次）。
 #[kernel::task(stack = 1024, priority = 2)]
-pub extern "C" fn notify_waiter(_arg: u32) -> ! {
+pub fn notify_waiter(_arg: u32) -> ! {
     loop {
         // 等待计数式通知并清零，超时则继续等（这里无限等待）
         let count = kernel::notify_take(true, INFINITE);
@@ -90,7 +90,7 @@ pub extern "C" fn notify_waiter(_arg: u32) -> ! {
 
 /// 周期性发送通知的任务。
 #[kernel::task(stack = 1024, priority = 3)]
-pub extern "C" fn notifier(_arg: u32) -> ! {
+pub fn notifier(_arg: u32) -> ! {
     loop {
         kernel::task_delay(500);
         unsafe {
@@ -113,7 +113,7 @@ kernel::static_message_buffer!(MSGS, 256);
 
 /// 流/消息生产者。
 #[kernel::task(stack = 1024, priority = 2)]
-pub extern "C" fn stream_producer(_arg: u32) -> ! {
+pub fn stream_producer(_arg: u32) -> ! {
     let mut counter: u32 = 0;
     loop {
         let data = counter.to_le_bytes();
@@ -126,7 +126,7 @@ pub extern "C" fn stream_producer(_arg: u32) -> ! {
 
 /// 流/消息消费者。
 #[kernel::task(stack = 1024, priority = 1)]
-pub extern "C" fn stream_consumer(_arg: u32) -> ! {
+pub fn stream_consumer(_arg: u32) -> ! {
     loop {
         let mut buf = [0u8; 8];
         // 流：读多少算多少
@@ -170,7 +170,7 @@ fn producer_co(co: &mut kernel::CoRoutine) {
 
 /// 演示基础特性仍然可用的任务（生产者/消费者 + 互斥锁 + 事件组 + 信号量）。
 #[kernel::task(stack = 1024, priority = 3)]
-pub extern "C" fn producer(_arg: u32) -> ! {
+pub fn producer(_arg: u32) -> ! {
     let mut counter: u32 = 0;
     loop {
         let _ = kernel::queue_send(MSG_QUEUE(), (&raw const counter) as *const u8, INFINITE);
@@ -181,7 +181,7 @@ pub extern "C" fn producer(_arg: u32) -> ! {
 }
 
 #[kernel::task(stack = 1024, priority = 2)]
-pub extern "C" fn consumer(_arg: u32) -> ! {
+pub fn consumer(_arg: u32) -> ! {
     loop {
         let mut value: u32 = 0;
         if kernel::queue_receive(MSG_QUEUE(), (&raw mut value) as *mut u8, INFINITE).is_ok() {
@@ -193,7 +193,7 @@ pub extern "C" fn consumer(_arg: u32) -> ! {
 static mut SHARED_COUNTER: u32 = 0;
 
 #[kernel::task(stack = 1024, priority = 4)]
-pub extern "C" fn mutex_task(_arg: u32) -> ! {
+pub fn mutex_task(_arg: u32) -> ! {
     loop {
         unsafe {
             let _ = kernel::mutex_lock(SHARED_MUTEX(), INFINITE);
@@ -205,7 +205,7 @@ pub extern "C" fn mutex_task(_arg: u32) -> ! {
 }
 
 #[kernel::task(stack = 1024, priority = 1)]
-pub extern "C" fn sync_task(_arg: u32) -> ! {
+pub fn sync_task(_arg: u32) -> ! {
     loop {
         let bits = kernel::event_group_wait_bits(EVENTS(), 0x01, true, false, INFINITE);
         let _ = bits;

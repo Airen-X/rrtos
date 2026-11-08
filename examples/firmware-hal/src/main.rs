@@ -79,7 +79,7 @@ fn reset() -> ! {
 
 /// PC13 LED：500ms 亮、500ms 灭。
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pc13(mut led: LedPc13) -> ! {
+fn led_pc13(mut led: LedPc13) -> ! {
     loop {
         led.set_low(); // 低电平 → 点亮
         kernel::task_delay(500);
@@ -90,7 +90,7 @@ extern "C" fn led_pc13(mut led: LedPc13) -> ! {
 
 /// PA1 LED：先错开 500ms 相位，再 500ms 亮、500ms 灭 → 与 PC13 交替点亮。
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pa1(mut led: LedPa1) -> ! {
+fn led_pa1(mut led: LedPa1) -> ! {
     kernel::task_delay(500);
     loop {
         led.set_low(); // 低电平 → 点亮

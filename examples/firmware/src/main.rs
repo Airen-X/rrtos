@@ -76,7 +76,7 @@ fn rtos_main() {
 
 /// PC13 LED：500ms 亮、500ms 灭。
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pc13() -> ! {
+fn led_pc13() -> ! {
     let gpioc = unsafe { &*pac::GPIOC::ptr() };
     loop {
         gpioc.bsrr.write(|w| w.br13().set_bit()); // 低电平 → 点亮
@@ -88,7 +88,7 @@ extern "C" fn led_pc13() -> ! {
 
 /// PA1 LED：先延时 500ms 错开相位，再 500ms 亮、500ms 灭 → 与 PC13 交替点亮。
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pa1() -> ! {
+fn led_pa1() -> ! {
     let gpioa = unsafe { &*pac::GPIOA::ptr() };
     kernel::task_delay(500);
     loop {

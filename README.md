@@ -106,7 +106,7 @@ pub fn main() { /* ... */ }
 
 ```rust
 #[kernel::task(stack = 1024, priority = 3)]
-pub extern "C" fn worker(arg: u32) -> ! {
+pub fn worker(arg: u32) -> ! {
     let _ = arg;
     loop { /* ... */ }
 }
@@ -115,7 +115,7 @@ pub extern "C" fn worker(arg: u32) -> ! {
 展开为：静态栈 + 静态 TCB + `extern "C"` 入口包装 + 同名构造器
 （`worker(arg) -> kernel::TaskHandle`，**仅创建、未调度**）。
 
-- 函数必须 `extern "C"`、返回 `!`、0 或 1 个参数；
+- 普通 `fn` 即可，返回 `!`、0 或 1 个参数（无需 `extern "C"`，宏内部自动生成入口包装）；
 - `stack` 字节数（默认 512，最小 128）；`priority` 0..32（默认 1，越大越高）；
 - **参数无需 `Copy`**：构造器把实参“移动”进任务自己的栈，任务入口再移动取出，
   因此可传递拥有外设所有权、不可 `Copy`/`Clone` 的结构体（内部用 Rust ABI，
@@ -203,7 +203,7 @@ fn rtos_main() {
 
 // 3) 任务：低电平点亮
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pc13() -> ! {
+fn led_pc13() -> ! {
     let gpioc = unsafe { &*pac::GPIOC::ptr() };
     loop {
         gpioc.bsrr.write(|w| w.br13().set_bit()); // 低电平点亮
@@ -241,7 +241,7 @@ extern "C" fn led_pc13() -> ! {
 type LedPc13 = PC13<Output<PushPull>>;
 
 #[kernel::task(stack = 1024, priority = 1)]
-extern "C" fn led_pc13(mut led: LedPc13) -> ! {
+fn led_pc13(mut led: LedPc13) -> ! {
     loop {
         led.set_low();           // 低电平点亮
         kernel::task_delay(500);

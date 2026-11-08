@@ -24,4 +24,6 @@ coroutine = []
 mpu = []
 
 [dependencies]
+# Cortex-M 寄存器/外设访问抽象（SCB/SysTick 等），便于移植到其它 Cortex-M 型号
+cortex-m = "0.7"
 kcore-macro = { path = "../kcore-macro" }

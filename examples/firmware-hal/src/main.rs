@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use cortex_m_rt::{entry, exception};
+use cortex_m_rt::entry;
 use stm32h7xx_hal::gpio::{Output, PushPull, PA1, PC13};
 use stm32h7xx_hal::{pac, prelude::*};
 
@@ -29,7 +29,6 @@ static mut HEAP: [u8; 16 * 1024] = [0; 16 * 1024];
 
 #[entry]
 fn reset() -> ! {
-    let cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
     // 电源约束 + 时钟：SYSCLK = 100 MHz（PLL）
@@ -64,23 +63,14 @@ fn reset() -> ! {
     led_pa1_pin.set_high();
     led_pc13_pin.set_high();
 
-    // SysTick：用冻结后的实际系统时钟计算 1ms 重载值
-    init_systick(cp.SYST, ccdr.clocks.sys_ck().raw());
+    // SysTick：用冻结后的实际系统时钟计算 1ms 重载值（内核内部绑定处理器）
+    kernel::systick_init(1000, ccdr.clocks.sys_ck().raw());
 
     // 内核：这里手动初始化（因为要把引脚所有权移交给任务，不走无参的 #[kernel::entry]）
     kernel::init(kernel::KernelConfig::default());
     kernel::spawn(led_pc13(led_pc13_pin));
     kernel::spawn(led_pa1(led_pa1_pin));
     kernel::start_scheduler()
-}
-
-fn init_systick(mut syst: cortex_m::peripheral::SYST, sysclk_hz: u32) {
-    use cortex_m::peripheral::syst::SystClkSource;
-    syst.set_clock_source(SystClkSource::Core);
-    syst.set_reload(sysclk_hz / kernel::tick_rate_hz() - 1);
-    syst.clear_current();
-    syst.enable_counter();
-    syst.enable_interrupt();
 }
 
 // ---------------------------------------------------------------------
@@ -110,16 +100,7 @@ extern "C" fn led_pa1(mut led: LedPa1) -> ! {
     }
 }
 
-// ---------------------------------------------------------------------
-// SysTick 异常：驱动内核节拍
-// ---------------------------------------------------------------------
-
-#[exception]
-fn SysTick() {
-    kernel::tick_handler();
-}
-
-// PendSV / SVC 处理器由 kernel 提供（含 PendSV/SVCall 别名，兼容 cortex-m-rt 0.7）。
+// SysTick / PendSV / SVC 处理器均由内核提供，无需在此定义。
 
 // ---------------------------------------------------------------------
 // 恐慌处理

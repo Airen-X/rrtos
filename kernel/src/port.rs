@@ -18,6 +18,7 @@ use core::mem::size_of;
 
 use crate::config;
 use crate::task::EntryFn;
+use cortex_m::peripheral::SCB;
 
 // =====================================================================
 // 异常帧（基本帧，8 字；FPU 扩展帧由硬件懒堆叠动态生成）
@@ -48,11 +49,6 @@ pub const TASK_EXIT_LR: u32 = 0xFFFF_FFFD;
 /// 任务栈头保留字节数：r4-r11(32) + EXC_RETURN(4) + 异常帧(32) = 68。
 /// `#[task]` 宏用它把参数放到栈头下方。
 pub const STACK_HEADER_SIZE: usize = 9 * 4 + 32;
-
-/// NVIC 中断控制与状态寄存器（ICSR）。
-const ICSR: *mut u32 = 0xE000_ED04 as *mut u32;
-/// PendSV 置位位（bit 28）。
-const PENDSVSET: u32 = 1 << 28;
 
 // =====================================================================
 // 临界区（对应 portENTER_CRITICAL / portEXIT_CRITICAL，基于 BASEPRI）
@@ -105,20 +101,15 @@ pub unsafe fn exit_critical() {
 /// 无抢占语义，单核下安全。
 #[inline(always)]
 pub unsafe fn yield_from_task() {
-    unsafe {
-        core::ptr::write_volatile(ICSR, PENDSVSET);
-        // 内存屏障，保证写立即生效
-        asm!("dsb", "isb");
-    }
+    SCB::set_pendsv();
+    asm!("dsb", "isb");
 }
 
 /// ISR 中触发 yield，对应 `portYIELD_FROM_ISR`。
 #[inline(always)]
 pub unsafe fn yield_from_isr() {
-    unsafe {
-        core::ptr::write_volatile(ICSR, PENDSVSET);
-        asm!("dsb", "isb");
-    }
+    SCB::set_pendsv();
+    asm!("dsb", "isb");
 }
 
 // =====================================================================
@@ -319,6 +310,12 @@ PendSV:
 SVCall:
     b SVC_Handler
     .size SVCall, . - SVCall
+
+    .global SysTick
+    .type SysTick, %function
+SysTick:
+    b SysTick_Handler
+    .size SysTick, . - SysTick
     "#
 );
 

@@ -18,6 +18,10 @@
 #[cfg(not(target_arch = "arm"))]
 compile_error!("rrtos 内核仅支持 arm (Cortex-M) 架构");
 
+// 再导出 cortex-m，调用方统一通过 `kernel::cortex_m` 访问，
+// 无需在应用里单独声明 cortex-m 依赖（版本与内核一致）。
+pub use cortex_m;
+
 // 再导出过程宏，从而支持 `#[kernel::entry]` / `#[kernel::task]` / `#[kernel::timer]`
 // 与静态对象声明 `kernel::static_queue!` / `kernel::static_mutex!` 等。
 // 依赖高级特性的声明宏按对应 feature 再导出。
@@ -55,7 +59,7 @@ pub use task::{
     task_create, task_delete, task_delay, task_get_priority, task_resume, task_set_priority,
     task_stack_free, task_stack_header_size, task_stack_used, task_suspend, task_yield,
 };
-pub use scheduler::{init, max_priorities, max_tasks, start_scheduler, tick_handler, tick_rate_hz};
+pub use scheduler::{init, max_priorities, max_tasks, start_scheduler, systick_init, tick_handler, tick_rate_hz};
 pub use queue::{
     queue_create, queue_is_empty, queue_is_full, queue_messages_waiting, queue_receive,
     queue_receive_from_isr, queue_send, queue_send_from_isr, Queue, QueueError, QueueHandle,

@@ -180,14 +180,17 @@ pub fn main() {
 #![no_std]
 #![no_main]
 
-use cortex_m_rt::{entry, exception};
+use cortex_m_rt::entry;
 use stm32h7::stm32h743 as pac;
+
+const SYSTEM_CLOCK_HZ: u32 = 64_000_000; // 实际 SYSCLK
 
 // 1) 复位入口：初始化硬件，再交给内核
 #[entry]
-fn reset() -> ! {
-    init_gpio();    // 使能 GPIO 时钟、配置 PA1/PC13 为输出
-    init_systick(); // SysTick 1ms 中断
+fn main() -> ! {
+    init_gpio();
+    // SysTick：1ms 节拍，按系统时钟自动计算重载值（内核内部已绑定处理器）
+    kernel::systick_init(1000, SYSTEM_CLOCK_HZ);
     rtos_main()     // 永不返回
 }
 
@@ -209,21 +212,19 @@ extern "C" fn led_pc13() -> ! {
         kernel::task_delay(500);
     }
 }
-
-// 4) SysTick 异常驱动内核节拍
-#[exception]
-fn SysTick() {
-    kernel::tick_handler();
-}
+// SysTick 处理器由内核提供，无需再写 #[exception] fn SysTick()
 ```
 
 要点：
 
-- `PendSV`/`SVC` 处理器由内核提供（导出 `PendSV_Handler`/`SVC_Handler`，
-  并额外提供 `PendSV`/`SVCall` 短命名别名，兼容 cortex-m-rt 0.7 的向量表）；
+- `PendSV`/`SVC`/`SysTick` 处理器均由内核提供（导出 `PendSV_Handler`/`SVC_Handler`/`SysTick_Handler`
+  及短命名别名 `PendSV`/`SVCall`/`SysTick`，兼容 cortex-m-rt 0.7 的向量表），
+  应用**不要**再定义同名处理器；
+- 系统节拍由 [`kernel::systick_init(interval_us, sysclk_hz)`] 初始化：
+  `reload = sysclk_hz × interval_us / 1_000_000`，节拍间隔以**微秒**为单位；
 - 需要 `memory.x`（见 `examples/firmware/memory.x`）与 `build.rs` 把其加入链接路径，
   并在 `.cargo/config.toml` 里加 `rustflags = ["-C", "link-arg=-Tlink.x"]`；
-- 系统时钟默认按 HSI 64 MHz 计算 SysTick，若配置了 PLL 请修改 `SYSTEM_CLOCK_HZ`。
+- 系统时钟默认按 HSI 64 MHz 计算，若配置了 PLL 请把 `SYSTEM_CLOCK_HZ` 改成实际值。
 
 ### HAL 版本（firmware-hal）
 
@@ -254,7 +255,7 @@ fn reset() -> ! {
     let ccdr = /* PWR + RCC 时钟 */;
     let mut led = /* gpioc.pc13.into_push_pull_output() */;
     led.set_high();
-    init_systick(cp.SYST, ccdr.clocks.sys_ck().raw());
+    kernel::systick_init(1000, ccdr.clocks.sys_ck().raw()); // SysTick 1ms
     kernel::init(kernel::KernelConfig::default());
     kernel::spawn(led_pc13(led)); // 引脚所有权移入任务
     kernel::start_scheduler()

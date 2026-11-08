@@ -3,16 +3,16 @@
 //! 功能：交替点亮 PC13 与 PA1 的两个 LED（**低电平点亮**）。
 //!
 //! 启动流程：
-//! 1. 复位 → `#[cortex_m_rt::entry] reset()`：初始化 GPIO 与 SysTick；
-//! 2. `reset()` 调用 `#[kernel::entry] rtos_main()`：spawn 两个 LED 任务；
+//! 1. 复位 → `#[cortex_m_rt::entry] main()`：初始化 GPIO，调用 `kernel::systick_init`；
+//! 2. `main()` 调用 `#[kernel::entry] rtos_main()`：spawn 两个 LED 任务；
 //! 3. `#[kernel::entry]` 末尾自动调用 `start_scheduler()` 进入调度；
-//! 4. SysTick 每 1ms 触发 `SysTick_Handler` → `kernel::tick_handler()`；
-//! 5. PendSV/SVC 由内核提供（`PendSV_Handler`/`SVC_Handler` 及 `PendSV`/`SVCall` 别名）。
+//! 4. SysTick 处理器由内核提供（`SysTick_Handler`/`SysTick`），驱动内核节拍；
+//! 5. PendSV/SVC 由内核提供（`PendSV_Handler`/`SVC_Handler` 及短命名别名）。
 
 #![no_std]
 #![no_main]
 
-use cortex_m_rt::{entry, exception};
+use cortex_m_rt::entry;
 use stm32h7::stm32h743 as pac;
 
 /// 系统时钟：默认 HSI 64 MHz（未配置外部晶振/PLL）。
@@ -40,19 +40,10 @@ fn init_gpio() {
     gpioc.bsrr.write(|w| w.bs13().set_bit());
 }
 
-/// 配置 SysTick：以处理器时钟为源，每 1ms 触发一次中断。
+/// 配置 SysTick：以处理器时钟为源，每 1ms 触发一次中断（内核内部已绑定处理器）。
 fn init_systick() {
-    const SYST_CSR: *mut u32 = 0xE000_E010 as *mut u32;
-    const SYST_RVR: *mut u32 = 0xE000_E014 as *mut u32;
-    const SYST_CVR: *mut u32 = 0xE000_E018 as *mut u32;
-
-    let reload = SYSTEM_CLOCK_HZ / kernel::tick_rate_hz() - 1;
-    unsafe {
-        SYST_RVR.write_volatile(reload);
-        SYST_CVR.write_volatile(0);
-        // CLKSOURCE=1（处理器时钟）| TICKINT=1（使能中断）| ENABLE=1
-        SYST_CSR.write_volatile(0b111);
-    }
+    // 1 ms = 1000 µs
+    kernel::systick_init(1000, SYSTEM_CLOCK_HZ);
 }
 
 // ---------------------------------------------------------------------
@@ -108,16 +99,7 @@ extern "C" fn led_pa1() -> ! {
     }
 }
 
-// ---------------------------------------------------------------------
-// SysTick 异常：驱动内核节拍
-// ---------------------------------------------------------------------
-
-#[exception]
-fn SysTick() {
-    kernel::tick_handler();
-}
-
-// PendSV / SVC 处理器由 kernel 提供，无需在此定义。
+// SysTick / PendSV / SVC 处理器均由内核提供，无需在此定义。
 
 // ---------------------------------------------------------------------
 // 恐慌处理

@@ -57,8 +57,8 @@ impl List {
     /// # Safety
     /// 只能在列表未使用时调用一次（通常在调度器启动前）。
     pub unsafe fn initialise(&mut self) {
-        self.end.next = &mut self.end;
-        self.end.prev = &mut self.end;
+        self.end.next = &raw mut self.end;
+        self.end.prev = &raw mut self.end;
         self.end.item_value = u32::MAX;
         self.end.container = ptr::null_mut();
         self.index = &mut self.end;

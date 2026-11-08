@@ -444,6 +444,42 @@ pub fn tick_handler() {
     }
 }
 
+/// 初始化 SysTick 并启动（**由调用方调用**，通常在复位入口、调度器启动前）。
+///
+/// 依据当前系统时钟计算重载值，节拍间隔以微秒为单位：
+/// `reload = sysclk_hz * interval_us / 1_000_000`。
+///
+/// - `interval_us`：节拍间隔（微秒，>= 1），例如 1 ms = `1000`；
+/// - `sysclk_hz`：当前系统时钟频率（Hz），例如 100 MHz = `100_000_000`。
+///
+/// 同时把内核的 `tick_rate_hz` 更新为 `1_000_000 / interval_us`。
+pub fn systick_init(interval_us: u32, sysclk_hz: u32) {
+    use cortex_m::peripheral::syst::SystClkSource;
+
+    let us = interval_us.max(1);
+    let ticks_per_sec = 1_000_000u64 / us as u64;
+    let reload = ((sysclk_hz as u64 * us as u64) / 1_000_000u64).max(1) as u32;
+
+    unsafe {
+        let mut syst = cortex_m::Peripherals::steal().SYST;
+        syst.set_clock_source(SystClkSource::Core); // 处理器时钟
+        syst.set_reload(reload - 1);
+        syst.clear_current();
+        syst.enable_counter();
+        syst.enable_interrupt();
+
+        ACTIVE_CONFIG.tick_rate_hz = ticks_per_sec as u32;
+    }
+}
+
+/// SysTick 中断处理器（内核已把该符号接入向量表：`SysTick_Handler` / `SysTick`）。
+///
+/// 应用**无需**再定义 `#[exception] fn SysTick()`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SysTick_Handler() {
+    tick_handler();
+}
+
 // =====================================================================
 // 启动
 // =====================================================================

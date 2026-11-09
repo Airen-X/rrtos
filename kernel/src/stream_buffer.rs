@@ -6,7 +6,7 @@
 
 use core::ptr;
 
-use crate::config::{TickType, INFINITE};
+use crate::config::{INFINITE, TickType};
 use crate::list::List;
 use crate::port;
 use crate::scheduler::{self, TimeOut};
@@ -83,15 +83,11 @@ pub fn stream_buffer_spaces(h: StreamBufferHandle) -> usize {
 }
 
 /// 发送 `len` 字节（任务级，可阻塞），返回实际写入字节数。
-pub fn stream_buffer_send(
-    h: StreamBufferHandle,
-    data: *const u8,
-    len: usize,
-    timeout: TickType,
-) -> usize {
+pub fn stream_buffer_send(h: StreamBufferHandle, data: &[u8], timeout: TickType) -> usize {
     unsafe {
         let mut to = TimeOut::new();
         let mut remaining = timeout;
+        let len = data.len();
         if timeout != 0 && timeout != INFINITE {
             scheduler::set_timeout_state(&mut to);
         }
@@ -101,10 +97,14 @@ pub fn stream_buffer_send(
             port::enter_critical();
             let space = (*h).size - (*h).bytes;
             if space > 0 {
-                let n = if space < len - written { space } else { len - written };
+                let n = if space < len - written {
+                    space
+                } else {
+                    len - written
+                };
                 let mut i = 0usize;
                 while i < n {
-                    *(*h).storage.add((*h).write_idx) = *data.add(written + i);
+                    *(*h).storage.add((*h).write_idx) = data[written + i];
                     (*h).write_idx += 1;
                     if (*h).write_idx >= (*h).size {
                         (*h).write_idx = 0;
@@ -143,13 +143,9 @@ pub fn stream_buffer_send(
 }
 
 /// 接收最多 `len` 字节（任务级，可阻塞），返回实际读出字节数。
-pub fn stream_buffer_receive(
-    h: StreamBufferHandle,
-    buf: *mut u8,
-    len: usize,
-    timeout: TickType,
-) -> usize {
+pub fn stream_buffer_receive(h: StreamBufferHandle, buf: &mut [u8], timeout: TickType) -> usize {
     unsafe {
+        let len = buf.len();
         let mut to = TimeOut::new();
         let mut remaining = timeout;
         if timeout != 0 && timeout != INFINITE {
@@ -160,10 +156,14 @@ pub fn stream_buffer_receive(
         while read < len {
             port::enter_critical();
             if (*h).bytes > 0 {
-                let n = if (*h).bytes < len - read { (*h).bytes } else { len - read };
+                let n = if (*h).bytes < len - read {
+                    (*h).bytes
+                } else {
+                    len - read
+                };
                 let mut i = 0usize;
                 while i < n {
-                    *buf.add(read + i) = *(*h).storage.add((*h).read_idx);
+                    buf[read + i] = *(*h).storage.add((*h).read_idx);
                     (*h).read_idx += 1;
                     if (*h).read_idx >= (*h).size {
                         (*h).read_idx = 0;
@@ -202,15 +202,16 @@ pub fn stream_buffer_receive(
 }
 
 /// 从中断发送（不阻塞）。返回 `true` 表示应触发上下文切换。
-pub unsafe fn stream_buffer_send_from_isr(h: StreamBufferHandle, data: *const u8, len: usize) -> bool {
+pub unsafe fn stream_buffer_send_from_isr(h: StreamBufferHandle, data: &[u8]) -> bool {
     unsafe {
+        let len = data.len();
         port::enter_critical();
         let mut yield_needed = false;
         let space = (*h).size - (*h).bytes;
         let n = if space < len { space } else { len };
         let mut i = 0usize;
         while i < n {
-            *(*h).storage.add((*h).write_idx) = *data.add(i);
+            *(*h).storage.add((*h).write_idx) = data[i];
             (*h).write_idx += 1;
             if (*h).write_idx >= (*h).size {
                 (*h).write_idx = 0;
@@ -227,14 +228,15 @@ pub unsafe fn stream_buffer_send_from_isr(h: StreamBufferHandle, data: *const u8
 }
 
 /// 从中断接收（不阻塞）。返回 `true` 表示应触发上下文切换。
-pub unsafe fn stream_buffer_receive_from_isr(h: StreamBufferHandle, buf: *mut u8, len: usize) -> bool {
+pub unsafe fn stream_buffer_receive_from_isr(h: StreamBufferHandle, buf: &mut [u8]) -> bool {
     unsafe {
+        let len = buf.len();
         port::enter_critical();
         let mut yield_needed = false;
         let n = if (*h).bytes < len { (*h).bytes } else { len };
         let mut i = 0usize;
         while i < n {
-            *buf.add(i) = *(*h).storage.add((*h).read_idx);
+            buf[i] = *(*h).storage.add((*h).read_idx);
             (*h).read_idx += 1;
             if (*h).read_idx >= (*h).size {
                 (*h).read_idx = 0;
@@ -251,7 +253,7 @@ pub unsafe fn stream_buffer_receive_from_isr(h: StreamBufferHandle, buf: *mut u8
 }
 
 // =====================================================================
-// 消息缓冲（流缓冲 + 4 字节长度头）
+// 消息缓冲（流缓冲 + 4 字节长度头）—— 原子化版本
 // =====================================================================
 
 /// 消息长度头字节数，对应 FreeRTOS `sbBYTES_TO_STORE_MESSAGE_LENGTH`。
@@ -261,10 +263,6 @@ pub const MESSAGE_LENGTH_BYTES: usize = 4;
 pub struct MessageBuffer {
     /// 底层流缓冲。
     pub stream: StreamBuffer,
-    /// 正在接收的消息总长度（0 = 未开始读一条消息）。
-    rx_len: usize,
-    /// 正在接收的消息剩余字节数。
-    rx_remaining: usize,
 }
 
 pub type MessageBufferHandle = *mut MessageBuffer;
@@ -273,8 +271,6 @@ impl MessageBuffer {
     pub const fn empty() -> Self {
         Self {
             stream: StreamBuffer::empty(),
-            rx_len: 0,
-            rx_remaining: 0,
         }
     }
 }
@@ -287,66 +283,194 @@ pub unsafe fn message_buffer_create(
 ) -> MessageBufferHandle {
     unsafe {
         let b = &mut *h;
+        // trigger_level 用 1：消息缓冲不需要按字节攒批，唤醒由"完整消息可达"判断。
         stream_buffer_create(&mut b.stream, storage, size, 1);
-        b.rx_len = 0;
-        b.rx_remaining = 0;
         h
+    }
+}
+
+/// 在持有临界区的前提下，向流缓冲写入至多 `n` 字节（不阻塞、不失败，n <= 剩余空间）。
+/// 调用者必须保证 `n <= size - bytes`，且已进入临界区。
+unsafe fn write_bytes_locked(h: StreamBufferHandle, data: &[u8]) {
+    unsafe {
+        let n = data.len();
+        let mut i = 0usize;
+        while i < n {
+            *(*h).storage.add((*h).write_idx) = data[i];
+            (*h).write_idx += 1;
+            if (*h).write_idx >= (*h).size {
+                (*h).write_idx = 0;
+            }
+            i += 1;
+        }
+        (*h).bytes += n;
+    }
+}
+
+/// 在持有临界区的前提下，从流缓冲读出至多 `n` 字节（不阻塞、不失败，n <= bytes）。
+/// 调用者必须保证 `n <= bytes`，且已进入临界区。
+unsafe fn read_bytes_locked(h: StreamBufferHandle, buf: &mut [u8]) {
+    unsafe {
+        let n = buf.len();
+        let mut i = 0usize;
+        while i < n {
+            buf[i] = *(*h).storage.add((*h).read_idx);
+            (*h).read_idx += 1;
+            if (*h).read_idx >= (*h).size {
+                (*h).read_idx = 0;
+            }
+            i += 1;
+        }
+        (*h).bytes -= n;
     }
 }
 
 /// 发送一条消息（长度头 + 数据），返回 `true` 成功 / `false` 失败（消息过大或超时）。
 ///
-/// 对应 `xMessageBufferSend`。
-pub fn message_buffer_send(
-    h: MessageBufferHandle,
-    data: *const u8,
-    len: usize,
-    timeout: TickType,
-) -> bool {
+/// 原子性保证：
+/// - 先等到 `4 + len` 连续空间，再在**单个临界区**内一次性写入头+数据；
+/// - 写入路径无阻塞、无失败分支，不存在"头写了数据没写"的中间态。
+pub fn message_buffer_send(h: MessageBufferHandle, data: &[u8], timeout: TickType) -> bool {
     unsafe {
-        if len == 0 || len > (*h).stream.size - MESSAGE_LENGTH_BYTES {
+        let len = data.len();
+        let total = MESSAGE_LENGTH_BYTES + len;
+        // 消息过大（含头都放不下）直接失败。
+        if len == 0 || total > (*h).stream.size {
             return false;
+        }
+
+        let stream = h as *mut StreamBuffer;
+        let mut to = TimeOut::new();
+        let mut remaining = timeout;
+        if timeout != 0 && timeout != INFINITE {
+            scheduler::set_timeout_state(&mut to);
         }
         let len_bytes = (len as u32).to_le_bytes();
-        if stream_buffer_send(h as *mut StreamBuffer, len_bytes.as_ptr(), MESSAGE_LENGTH_BYTES, timeout)
-            != MESSAGE_LENGTH_BYTES
-        {
-            return false;
+
+        // 阶段一：等待足够的连续空间（可阻塞 / 可超时）。
+        loop {
+            port::enter_critical();
+            let space = (*stream).size - (*stream).bytes;
+            if space >= total {
+                // 阶段二：空间已足够，一次性写入头+数据（不可中断、无失败）。
+                write_bytes_locked(stream, &len_bytes);
+                write_bytes_locked(stream, data);
+
+                // 唤醒接收者：完整消息已就绪（bytes >= trigger_level 恒成立，trigger_level=1）。
+                let mut yield_needed = false;
+                if !(*stream).receivers.is_empty() {
+                    yield_needed = scheduler::remove_from_event_list(&mut (*stream).receivers);
+                }
+                port::exit_critical();
+                if yield_needed {
+                    port::yield_from_task();
+                }
+                return true;
+            }
+
+            // 空间不足：处理超时 / 阻塞。
+            if timeout == 0 {
+                port::exit_critical();
+                return false;
+            }
+            if scheduler::check_timeout(&mut to, &mut remaining) {
+                port::exit_critical();
+                return false;
+            }
+            scheduler::block_current(&mut (*stream).senders, remaining);
+            port::exit_critical();
+            port::yield_from_task();
         }
-        stream_buffer_send(h as *mut StreamBuffer, data, len, timeout) == len
     }
 }
 
-/// 接收一条消息（可跨多次调用读取），返回本次读出的字节数。
+/// 接收一条消息，返回本次读出的字节数（0 表示超时 / 无消息）。
 ///
-/// 对应 `xMessageBufferReceive`。第一次调用会先读出长度头并阻塞等待数据；
-/// 之后每次调用最多返回 `len` 字节，直到本条消息读完。
-pub fn message_buffer_receive(
-    h: MessageBufferHandle,
-    buf: *mut u8,
-    len: usize,
-    timeout: TickType,
-) -> usize {
+/// 原子性保证：
+/// - 先确保"长度头 + 完整消息数据"都在缓冲里，再在**单个临界区**内一次性读头+数据；
+/// - 不存在"头已消费、数据没读到"的歧义；返回 0 一定意味着没有任何字节被消费。
+///
+/// 注意：本版本一次性读出整条消息，`buf.len()` 必须 >= 消息长度，
+/// 否则返回 0 且不消费任何数据（避免部分接收的状态机复杂度）。
+pub fn message_buffer_receive(h: MessageBufferHandle, buf: &mut [u8], timeout: TickType) -> usize {
     unsafe {
-        if (*h).rx_remaining == 0 {
-            // 读长度头
-            let mut len_bytes = [0u8; MESSAGE_LENGTH_BYTES];
-            if stream_buffer_receive(
-                h as *mut StreamBuffer,
-                len_bytes.as_mut_ptr(),
-                MESSAGE_LENGTH_BYTES,
-                timeout,
-            ) != MESSAGE_LENGTH_BYTES
-            {
-                return 0;
-            }
-            (*h).rx_len = u32::from_le_bytes(len_bytes) as usize;
-            (*h).rx_remaining = (*h).rx_len;
+        let stream = h as *mut StreamBuffer;
+        let mut to = TimeOut::new();
+        let mut remaining = timeout;
+        if timeout != 0 && timeout != INFINITE {
+            scheduler::set_timeout_state(&mut to);
         }
 
-        let want = if len < (*h).rx_remaining { len } else { (*h).rx_remaining };
-        let got = stream_buffer_receive(h as *mut StreamBuffer, buf, want, timeout);
-        (*h).rx_remaining -= got;
-        got
+        loop {
+            port::enter_critical();
+            // 先看头是否可达：至少要有 4 字节才能读长度。
+            if (*stream).bytes < MESSAGE_LENGTH_BYTES {
+                // 头都不完整：进入等待。
+                if timeout == 0 {
+                    port::exit_critical();
+                    return 0;
+                }
+                if scheduler::check_timeout(&mut to, &mut remaining) {
+                    port::exit_critical();
+                    return 0;
+                }
+                scheduler::block_current(&mut (*stream).receivers, remaining);
+                port::exit_critical();
+                port::yield_from_task();
+                continue;
+            }
+
+            // 读长度头（只在临界区内读，但不消费——先 peek）。
+            let mut len_bytes = [0u8; MESSAGE_LENGTH_BYTES];
+            let mut idx = (*stream).read_idx;
+            let mut i = 0usize;
+            while i < MESSAGE_LENGTH_BYTES {
+                len_bytes[i] = *(*stream).storage.add(idx);
+                idx += 1;
+                if idx >= (*stream).size {
+                    idx = 0;
+                }
+                i += 1;
+            }
+            let msg_len = u32::from_le_bytes(len_bytes) as usize;
+
+            // 数据是否完整到达？不完整则等待（头尚未消费，可安全重试）。
+            if (*stream).bytes < MESSAGE_LENGTH_BYTES + msg_len {
+                if timeout == 0 {
+                    port::exit_critical();
+                    return 0;
+                }
+                if scheduler::check_timeout(&mut to, &mut remaining) {
+                    port::exit_critical();
+                    return 0;
+                }
+                scheduler::block_current(&mut (*stream).receivers, remaining);
+                port::exit_critical();
+                port::yield_from_task();
+                continue;
+            }
+
+            // 调用者缓冲是否足够？不足则返回 0 且不消费（避免部分接收歧义）。
+            if buf.len() < msg_len {
+                port::exit_critical();
+                return 0;
+            }
+
+            // 完整消息已就绪，且在单个临界区内一次性消费头+数据。
+            let mut head = [0u8; MESSAGE_LENGTH_BYTES];
+            read_bytes_locked(stream, &mut head);
+            read_bytes_locked(stream, &mut buf[..msg_len]);
+
+            // 腾出空间，唤醒发送者。
+            let mut yield_needed = false;
+            if !(*stream).senders.is_empty() {
+                yield_needed = scheduler::remove_from_event_list(&mut (*stream).senders);
+            }
+            port::exit_critical();
+            if yield_needed {
+                port::yield_from_task();
+            }
+            return msg_len;
+        }
     }
 }

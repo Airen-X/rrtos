@@ -117,8 +117,8 @@ pub fn stream_producer(_arg: u32) -> ! {
     let mut counter: u32 = 0;
     loop {
         let data = counter.to_le_bytes();
-        let _ = kernel::stream_buffer_send(STREAM(), data.as_ptr(), 4, INFINITE);
-        let _ = kernel::message_buffer_send(MSGS(), data.as_ptr(), 4, INFINITE);
+        let _ = kernel::stream_buffer_send(STREAM(), &data, INFINITE);
+        let _ = kernel::message_buffer_send(MSGS(), &data, INFINITE);
         counter = counter.wrapping_add(1);
         kernel::task_delay(200);
     }
@@ -130,11 +130,11 @@ pub fn stream_consumer(_arg: u32) -> ! {
     loop {
         let mut buf = [0u8; 8];
         // 流：读多少算多少
-        let n = kernel::stream_buffer_receive(STREAM(), buf.as_mut_ptr(), 8, INFINITE);
+        let n = kernel::stream_buffer_receive(STREAM(), &mut buf, INFINITE);
         let _ = n;
         // 消息：按完整消息读（跨调用时由内核维护进度）
         let mut msg = [0u8; 8];
-        let m = kernel::message_buffer_receive(MSGS(), msg.as_mut_ptr(), 8, INFINITE);
+        let m = kernel::message_buffer_receive(MSGS(), &mut msg, INFINITE);
         let _ = m;
     }
 }

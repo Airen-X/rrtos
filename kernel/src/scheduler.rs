@@ -392,7 +392,10 @@ unsafe fn reset_next_unblock_time() {
 
 /// 系统节拍递增（由 SysTick 处理器调用）。
 ///
-/// 返回 `true` 表示唤醒了更高优先级任务（调用方应触发 PendSV）。
+/// 返回 `true` 表示需要触发 PendSV 上下文切换：
+/// - 唤醒了更高优先级任务；或
+/// - 时间片轮转：当前任务仍就绪且同优先级有多个就绪任务
+///   （对应 FreeRTOS `configUSE_TIME_SLICING = 1`，每个节拍切换一次）。
 pub unsafe fn increment_tick() -> bool {
     unsafe {
         let mut yield_needed = false;
@@ -427,6 +430,16 @@ pub unsafe fn increment_tick() -> bool {
                 if (*t).priority > (*pxCurrentTCB).priority {
                     yield_needed = true;
                 }
+            }
+        }
+
+        // 时间片轮转：同优先级就绪任务 > 1 时，每个节拍切换一次。
+        // 实际的“轮转顺序”由 PendSV 里的 vTaskSwitchContext 完成：
+        // 它用 get_owner_of_next_entry 前移就绪列表的 pxIndex，天然按 FIFO 轮转。
+        if !yield_needed && !pxCurrentTCB.is_null() {
+            let prio = (*pxCurrentTCB).priority as usize;
+            if (*ready_ptr(prio)).number_of_items > 1 {
+                yield_needed = true;
             }
         }
 

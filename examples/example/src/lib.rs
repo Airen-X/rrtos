@@ -190,8 +190,8 @@ pub fn mutex_task(_arg: u32) -> ! {
     loop {
         {
             let mut g = SHARED_COUNTER.lock(); // 阻塞获取（内部优先级继承）
-            *g = g.wrapping_add(1);            // DerefMut 直接读写数据
-        }                                      // 离开作用域自动解锁（RAII）
+            *g = g.wrapping_add(1); // DerefMut 直接读写数据
+        } // 离开作用域自动解锁（RAII）
         kernel::task_delay(50);
     }
 }

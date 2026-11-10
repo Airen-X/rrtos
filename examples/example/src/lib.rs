@@ -13,7 +13,7 @@ use core::ptr;
 use kernel::{self, INFINITE};
 
 // 注册内核堆为 Rust 全局分配器：之后即可使用 alloc::vec::Vec / String / Box 等
-kernel::use_alloc!();
+kernel::use_alloc!(HEAP:16*1024);
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -35,8 +35,6 @@ static EVENTS: kernel::EventFlags = kernel::EventFlags::new();
 // ---------------------------------------------------------------------
 // 高级特性 1：内存管理（静态堆 + kmalloc/kfree）
 // ---------------------------------------------------------------------
-
-static mut HEAP: [u8; 16 * 1024] = [0; 16 * 1024];
 
 /// 演示堆分配/释放的任务：同时展示 kmalloc/kfree 与 Rust 原生 alloc（Vec/String/Box）。
 #[kernel::task(stack = 4096, priority = 1)]

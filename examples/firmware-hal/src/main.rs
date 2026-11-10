@@ -10,18 +10,18 @@
 extern crate alloc;
 
 use cortex_m_rt::entry;
-use stm32h7xx_hal::gpio::{Output, PushPull, PA1, PC13};
+use stm32h7xx_hal::gpio::{Output, PA1, PC13, PushPull};
 use stm32h7xx_hal::{pac, prelude::*};
 
 // 把内核堆注册为 Rust 全局分配器：之后可用 Vec/String/Box 等
-kernel::use_alloc!();
+kernel::use_alloc!(HEAP:16 * 1024);
 
 // 类型别名：任务参数用的具体引脚类型
 type LedPc13 = PC13<Output<PushPull>>;
 type LedPa1 = PA1<Output<PushPull>>;
 
 // 静态堆（供 #[global_allocator] 使用）
-static mut HEAP: [u8; 16 * 1024] = [0; 16 * 1024];
+// static mut HEAP: [u8; 16 * 1024] = [0; 16 * 1024];
 
 // ---------------------------------------------------------------------
 // 复位入口
@@ -39,10 +39,7 @@ fn reset() -> ! {
 
     // 初始化内核堆（必须先于任何分配）
     unsafe {
-        kernel::heap_init(
-            core::ptr::addr_of_mut!(HEAP) as *mut u8,
-            16 * 1024,
-        );
+        kernel::heap_init(&raw mut HEAP as *mut u8, 16 * 1024);
     }
 
     // 演示 Rust 原生 alloc（Vec 分配并自动释放）

@@ -265,16 +265,19 @@ unsafe impl core::alloc::GlobalAlloc for KernelAllocator {
 }
 
 /// 注册 [`KernelAllocator`] 为全局分配器（等价于手写 `#[global_allocator]`）。
-///
+/// 并建立静态堆
 /// 在应用 crate 根模块调用一次：
 /// ```ignore
 /// extern crate alloc;
-/// kernel::use_alloc!();          // 之后即可使用 Vec/String/Box 等
-/// ```
+/// kernel::use_alloc!(HEAPNAME:SIZE);          // 之后即可使用 Vec/String/Box 等
+/// ```    
+/// #[repr(align(8))]
+/// SIZE
 #[macro_export]
 macro_rules! use_alloc {
-    () => {
+    ($name:ident:$size:expr) => {
         #[global_allocator]
         static __RRTOS_GLOBAL_ALLOCATOR__: $crate::KernelAllocator = $crate::KernelAllocator;
+        static mut $name: [u8; $size] = [0; $size];
     };
 }

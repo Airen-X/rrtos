@@ -25,8 +25,6 @@ use alloc::vec::Vec;
 
 // 消息队列：4 个 u32
 kernel::static_queue!(MSG_QUEUE, u32, 4);
-// 互斥锁
-kernel::static_mutex!(SHARED_MUTEX);
 // 二值信号量
 kernel::static_semaphore!(BINARY_SEM);
 // 计数信号量（最多 8，初始 0）
@@ -190,16 +188,16 @@ pub fn consumer(_arg: u32) -> ! {
     }
 }
 
-static mut SHARED_COUNTER: u32 = 0;
+/// Rust 风格互斥锁：锁与被保护数据一体（普通 `static`，无需 unsafe 访问数据）。
+static SHARED_COUNTER: kernel::Mutex<u32> = kernel::Mutex::new(0);
 
 #[kernel::task(stack = 1024, priority = 4)]
 pub fn mutex_task(_arg: u32) -> ! {
     loop {
-        unsafe {
-            let _ = kernel::mutex_lock(SHARED_MUTEX(), INFINITE);
-            SHARED_COUNTER = SHARED_COUNTER.wrapping_add(1);
-            let _ = kernel::mutex_unlock(SHARED_MUTEX());
-        }
+        {
+            let mut g = SHARED_COUNTER.lock(); // 阻塞获取（内部优先级继承）
+            *g = g.wrapping_add(1);            // DerefMut 直接读写数据
+        }                                      // 离开作用域自动解锁（RAII）
         kernel::task_delay(50);
     }
 }
@@ -219,8 +217,9 @@ pub fn sync_task(_arg: u32) -> ! {
 // ---------------------------------------------------------------------
 
 #[kernel::timer(period = 500, auto_reload = true)]
-pub extern "C" fn blink(_id: *mut ()) {
-    let _ = _id;
+pub extern "C" fn blink(id: *mut ()) {
+    // id 是创建时传入的定时器 ID（FreeRTOS 的 pvTimerID）
+    let _ = id;
 }
 
 // ---------------------------------------------------------------------
@@ -262,9 +261,8 @@ pub fn setup() {
 
     // 4) 协程：由空闲任务驱动
     kernel::co_routine_create(ptr::addr_of_mut!(CO1), producer_co, 1);
-
-    // 5) 软件定时器
-    let timer_handle = blink();
+    // 5) 软件定时器：创建（传入定时器 ID 用户数据）并启动
+    let timer_handle = blink(ptr::null_mut());
     let _ = kernel::timer_start(timer_handle, 0);
 
     // 6) MPU：保护堆所在的内存区域（特权读写、不可执行），并使能 MPU

@@ -69,7 +69,7 @@ pub use semaphore::{
     semaphore_count, semaphore_create_binary, semaphore_create_counting, semaphore_give,
     semaphore_give_from_isr, semaphore_take, semaphore_take_from_isr,
 };
-pub use mutex::{mutex_create, mutex_holder, mutex_lock, mutex_unlock};
+pub use mutex::{mutex_create, mutex_holder, mutex_lock, mutex_unlock, Mutex, MutexGuard};
 pub use event_group::{
     event_group_clear_bits, event_group_create, event_group_get_bits, event_group_set_bits,
     event_group_set_bits_from_isr, event_group_wait_bits, EventGroup, EventGroupHandle,

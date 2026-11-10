@@ -142,3 +142,124 @@ pub fn mutex_unlock(mutex: QueueHandle) -> Result<(), QueueError> {
 pub fn mutex_holder(mutex: QueueHandle) -> TaskHandle {
     unsafe { (*mutex).holder }
 }
+
+// =====================================================================
+// Rust 风格互斥锁：`Mutex<T>` —— 锁与被保护数据一体，RAII 守卫自动解锁
+// =====================================================================
+
+use core::cell::UnsafeCell;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Rust 风格的互斥锁：内置互斥量控制块与被保护的数据 `T`。
+///
+/// 与 [`std::sync::Mutex`] 语义一致（底层仍使用内核的优先级继承互斥量）：
+/// ```ignore
+/// static CNT: kernel::Mutex<u32> = kernel::Mutex::new(0);
+///
+/// fn bump() {
+///     let mut g = CNT.lock();   // 阻塞获取
+///     *g = g.wrapping_add(1);   // DerefMut 直接读写数据
+/// }                              // 离开作用域自动解锁（不可忘记）
+/// ```
+///
+/// 使用普通 `static`（而非 `static mut`）即可：数据通过 [`UnsafeCell`] 在锁保护下
+/// 访问，读写被保护值无需 `unsafe`。
+pub struct Mutex<T> {
+    /// 底层互斥量（项大小 0、长度 1 的队列 + 持有者 + 优先级继承）。
+    inner: Queue,
+    /// 被保护的数据。
+    data: UnsafeCell<T>,
+    /// 内部互斥量是否已初始化（首次加锁时在临界区内完成）。
+    initialised: AtomicBool,
+}
+
+impl<T> Mutex<T> {
+    /// 以初始值构造互斥锁（`const`，可用于 `static` 初始化）。
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: Queue::empty(),
+            data: UnsafeCell::new(value),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    /// 惰性初始化内部互斥量（线程/中断安全，仅执行一次）。
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    mutex_create(&self.inner as *const Queue as *mut Queue);
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> QueueHandle {
+        &self.inner as *const Queue as *mut Queue
+    }
+
+    /// 阻塞获取锁（无限等待），返回 RAII 守卫。
+    pub fn lock(&self) -> MutexGuard<'_, T> {
+        self.ensure_init();
+        let _ = mutex_lock(self.handle(), config::INFINITE);
+        MutexGuard { mutex: self }
+    }
+
+    /// 带超时的获取：`timeout` 个节拍内未获得则返回 `None`。
+    pub fn lock_timeout(&self, timeout: TickType) -> Option<MutexGuard<'_, T>> {
+        self.ensure_init();
+        match mutex_lock(self.handle(), timeout) {
+            Ok(()) => Some(MutexGuard { mutex: self }),
+            Err(_) => None,
+        }
+    }
+
+    /// 尝试获取（不阻塞）：立即成功返回守卫，否则 `None`。
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+        self.ensure_init();
+        match mutex_lock(self.handle(), 0) {
+            Ok(()) => Some(MutexGuard { mutex: self }),
+            Err(_) => None,
+        }
+    }
+
+    /// 是否已被初始化（调试用）。
+    pub fn is_initialised(&self) -> bool {
+        self.initialised.load(Ordering::Acquire)
+    }
+}
+
+/// 互斥锁 RAII 守卫：`Deref/DerefMut` 访问数据，`Drop` 自动解锁。
+pub struct MutexGuard<'a, T> {
+    mutex: &'a Mutex<T>,
+}
+
+impl<T> Deref for MutexGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.mutex.data.get() }
+    }
+}
+
+impl<T> DerefMut for MutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.mutex.data.get() }
+    }
+}
+
+impl<T> Drop for MutexGuard<'_, T> {
+    fn drop(&mut self) {
+        // 持有者必然是本任务；失败仅可能源于误用，忽略即可
+        let _ = mutex_unlock(self.mutex.handle());
+    }
+}
+
+// `Mutex<T>` 内含裸指针（Queue），手工声明线程安全语义：
+// 同一时刻只有一个任务能通过守卫访问数据。
+unsafe impl<T: Send> Send for Mutex<T> {}
+unsafe impl<T: Send> Sync for Mutex<T> {}

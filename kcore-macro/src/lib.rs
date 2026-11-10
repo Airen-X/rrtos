@@ -305,7 +305,9 @@ impl Parse for TimerArgs {
 /// - 函数必须为 `extern "C"`，无返回值，参数为 `id: *mut ()`（可省略）；
 /// - `period` 为周期节拍数；`auto_reload` 为是否周期重载。
 ///
-/// 生成的同名函数是构造器，返回 `::kernel::TimerHandle`（未启动，需 `timer_start`）。
+/// 生成的同名函数是构造器：`blink(id: *mut ()) -> ::kernel::TimerHandle`，
+/// 传入的 `id` 即 FreeRTOS 的 `pvTimerID`，会在定时器触发时原样传给回调
+/// （未启动，需 `timer_start`）。
 #[proc_macro_attribute]
 pub fn timer(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TimerArgs);
@@ -407,7 +409,7 @@ fn expand_timer(args: &TimerArgs, func: &ItemFn) -> syn::Result<proc_macro2::Tok
         #[allow(non_upper_case_globals)]
         static mut #timer_static: ::kernel::Timer = ::kernel::Timer::empty();
 
-        #vis fn #fn_name() -> ::kernel::TimerHandle {
+        #vis fn #fn_name(id: *mut ()) -> ::kernel::TimerHandle {
             unsafe {
                 ::kernel::timer_create(
                     ::core::ptr::addr_of_mut!(#timer_static),
@@ -415,7 +417,7 @@ fn expand_timer(args: &TimerArgs, func: &ItemFn) -> syn::Result<proc_macro2::Tok
                     stringify!(#fn_name),
                     #period,
                     #auto_reload,
-                    ::core::ptr::null_mut(),
+                    id,
                 )
             }
         }

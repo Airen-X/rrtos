@@ -133,10 +133,35 @@ kernel::spawn(h);     // 加入就绪列表，开始参与调度
 
 ```rust
 #[kernel::timer(period = 500, auto_reload = true)]
-pub extern "C" fn blink(id: *mut ()) { /* ... */ }
+pub extern "C" fn blink(id: *mut ()) { /* id 即创建时传入的用户数据 */ }
+
+let h = blink(ptr::null_mut());        // 构造器：blink(id: *mut ()) -> TimerHandle
+let _ = kernel::timer_start(h, 0);     // 启动
 ```
 
-展开为：静态 `Timer` + 回调包装 + 同名构造器（`blink() -> kernel::TimerHandle`，未启动）。
+展开为：静态 `Timer` + 回调包装 + 同名构造器（`blink(id: *mut ()) -> kernel::TimerHandle`，未启动）。
+构造器传入的 `id` 对应 FreeRTOS 的 `pvTimerID`，定时器触发时原样传给回调。
+
+### Rust 风格互斥锁（`kernel::Mutex<T>`）
+
+锁与被保护数据一体，`lock()` 返回 RAII 守卫，`Deref/DerefMut` 直接读写数据、
+离开作用域自动解锁（底层仍是内核的优先级继承互斥量）：
+
+```rust
+static CNT: kernel::Mutex<u32> = kernel::Mutex::new(0); // 普通 static，非 static mut
+
+fn bump() {
+    let mut g = CNT.lock();      // 阻塞获取（等价 mutex_lock(INFINITE)）
+    *g = g.wrapping_add(1);      // DerefMut：无需 unsafe 直接读写数据
+}                                // 离开作用域自动解锁（RAII，不可忘记）
+
+let ok = CNT.try_lock().is_some();          // 非阻塞尝试
+let g  = CNT.lock_timeout(100).unwrap();    // 带超时（节拍）
+```
+
+对应关系：`lock()` ≈ `mutex_lock(INFINITE)`，`lock_timeout(t)` ≈ `mutex_lock(t)`，
+`try_lock()` ≈ `mutex_lock(0)`。低层 API（`mutex_lock/mutex_unlock/mutex_create`）
+与 `static_mutex!` 仍保留，供 FreeRTOS 风格使用。
 
 ### 静态内核对象（`kernel::static_*!`）
 
@@ -144,7 +169,7 @@ pub extern "C" fn blink(id: *mut ()) { /* ... */ }
 
 ```rust
 kernel::static_queue!(MSG_QUEUE, u32, 4);        // 消息队列：4 个 u32
-kernel::static_mutex!(SHARED_MUTEX);             // 互斥锁
+kernel::static_mutex!(SHARED_MUTEX);             // 互斥锁（FreeRTOS 风格低层句柄）
 kernel::static_semaphore!(BINARY_SEM);           // 二值信号量
 kernel::static_semaphore!(COUNT_SEM, 8, 0);      // 计数信号量（最大 8，初始 0）
 kernel::static_event_group!(EVENTS);             // 事件组

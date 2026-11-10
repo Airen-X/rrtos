@@ -163,6 +163,57 @@ let g  = CNT.lock_timeout(100).unwrap();    // 带超时（节拍）
 `try_lock()` ≈ `mutex_lock(0)`。低层 API（`mutex_lock/mutex_unlock/mutex_create`）
 与 `static_mutex!` 仍保留，供 FreeRTOS 风格使用。
 
+### Rust 风格内核对象（类型安全 + 方法调用 + RAII）
+
+除互斥锁外，其余内核对象也提供了 Rust 风格静态类型（普通 `static`、
+`&self` 方法、首次使用惰性初始化、离开作用域自动归还）：
+
+```rust
+// 消息队列：容量 4 个 u32，类型安全收发
+static Q: kernel::StaticQueue<u32, 4> = kernel::StaticQueue::new();
+let _ = Q.send(42);                 // 阻塞发送
+if let Ok(v) = Q.try_recv() { }     // 非阻塞接收
+
+// 二值 / 计数信号量：acquire 返回 RAII 许可，离开作用域自动 release
+static BS: kernel::BinarySemaphore = kernel::BinarySemaphore::new();
+let _ = BS.release();
+let _permit = BS.acquire();         // 离开作用域自动 release
+
+static CS: kernel::CountingSemaphore<8> = kernel::CountingSemaphore::new();
+let _p = CS.acquire();
+
+// 事件组：方法式置位/等待
+static EVT: kernel::EventFlags = kernel::EventFlags::new();
+EVT.set(0b0001);
+let bits = EVT.wait_any(0b0011, true, kernel::INFINITE);
+
+// 流 / 消息缓冲：切片式读写
+static SB: kernel::StaticStreamBuffer<256> = kernel::StaticStreamBuffer::new();
+let n = SB.write(b"hello");         // 阻塞写入
+let mut buf = [0u8; 16];
+let n = SB.read(&mut buf);          // 阻塞读取
+
+static MB: kernel::StaticMessageBuffer<256> = kernel::StaticMessageBuffer::new();
+MB.send(b"msg");                    // 阻塞发送一条消息
+let n = MB.recv(&mut buf);          // 阻塞接收整条消息（buf 需 >= 消息长度）
+
+// 任务通知：Notifier 绑定目标任务句柄，方法式发送
+let waiter = notify_waiter(0);      // #[task] 构造器返回 TaskHandle
+let n = kernel::Notifier::new(waiter);
+n.give();                           // 计数 +1；set_bits / overwrite 同族
+```
+
+| Rust 风格类型 | 低层 API |
+|--------------|---------|
+| `StaticQueue<T, N>` | `queue_send` / `queue_receive` |
+| `BinarySemaphore` / `CountingSemaphore<N>` + `SemaphorePermit` | `semaphore_take` / `semaphore_give` |
+| `Mutex<T>` + `MutexGuard<T>` | `mutex_lock` / `mutex_unlock` |
+| `EventFlags` + `WaitMode` | `event_group_set_bits` / `event_group_wait_bits` |
+| `StaticStreamBuffer<N>` / `StaticMessageBuffer<N>` | `stream_buffer_send` / `message_buffer_receive` |
+| `Notifier` | `notify_give` / `notify_set_bits` / `notify_overwrite` |
+
+低层 FreeRTOS 风格 API 与 `static_*!` 声明宏全部保留，可按需混用。
+
 ### 静态内核对象（`kernel::static_*!`）
 
 内核对象的静态存储与初始化可一行声明，首次访问时在临界区内惰性初始化：

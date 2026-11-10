@@ -3,9 +3,14 @@
 //! 对应 FreeRTOS `semphr.h`：以“项大小为 0 的队列”实现。
 
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::TickType;
-use crate::queue::{self, QueueHandle, QueueError, QUEUE_TYPE_BINARY_SEMAPHORE, QUEUE_TYPE_COUNTING_SEMAPHORE};
+use crate::config::{self, TickType};
+use crate::port;
+use crate::queue::{
+    self, Queue, QueueError, QueueHandle, QUEUE_TYPE_BINARY_SEMAPHORE,
+    QUEUE_TYPE_COUNTING_SEMAPHORE,
+};
 
 /// 创建二值信号量。初始为空，需先 `semaphore_give` 一次才能 `take`。
 ///
@@ -55,3 +60,172 @@ pub unsafe fn semaphore_take_from_isr(sem: QueueHandle) -> bool {
 pub fn semaphore_count(sem: QueueHandle) -> usize {
     queue::queue_messages_waiting(sem)
 }
+
+// =====================================================================
+// Rust 风格信号量：`BinarySemaphore` / `CountingSemaphore<N>` + RAII 许可
+// =====================================================================
+
+/// 信号量许可（RAII）：`acquire` 返回，离开作用域自动 `release`。
+pub struct SemaphorePermit {
+    handle: QueueHandle,
+}
+
+impl Drop for SemaphorePermit {
+    fn drop(&mut self) {
+        // 计数满时 give 会失败，忽略即可
+        let _ = semaphore_give(self.handle, 0);
+    }
+}
+
+/// Rust 风格二值信号量（初始为空，须先 `release` 一次才能 `acquire`）。
+///
+/// ```ignore
+/// static SEM: kernel::BinarySemaphore = kernel::BinarySemaphore::new();
+///
+/// SEM.release();                    // 释放（计数 +1）
+/// let p = SEM.acquire();            // 阻塞获取，返回 RAII 许可
+/// // ... 使用受保护资源 ...
+///                                   // 离开作用域自动 release
+/// ```
+pub struct BinarySemaphore {
+    inner: Queue,
+    initialised: AtomicBool,
+}
+
+impl BinarySemaphore {
+    pub const fn new() -> Self {
+        Self {
+            inner: Queue::empty(),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> QueueHandle {
+        &self.inner as *const Queue as *mut Queue
+    }
+
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    queue::queue_create(self.handle(), ptr::null_mut(), 1, 0, QUEUE_TYPE_BINARY_SEMAPHORE);
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 阻塞获取，返回 RAII 许可。
+    pub fn acquire(&self) -> SemaphorePermit {
+        self.ensure_init();
+        let _ = semaphore_take(self.handle(), config::INFINITE);
+        SemaphorePermit { handle: self.handle() }
+    }
+
+    /// 非阻塞获取。
+    pub fn try_acquire(&self) -> Option<SemaphorePermit> {
+        self.ensure_init();
+        semaphore_take(self.handle(), 0)
+            .ok()
+            .map(|()| SemaphorePermit { handle: self.handle() })
+    }
+
+    /// 带超时获取（`timeout` 个节拍）。
+    pub fn acquire_timeout(&self, timeout: TickType) -> Option<SemaphorePermit> {
+        self.ensure_init();
+        semaphore_take(self.handle(), timeout)
+            .ok()
+            .map(|()| SemaphorePermit { handle: self.handle() })
+    }
+
+    /// 释放（计数 +1，可从中断调用）。
+    pub fn release(&self) -> Result<(), QueueError> {
+        self.ensure_init();
+        semaphore_give(self.handle(), 0)
+    }
+
+    /// 当前计数（0 或 1）。
+    pub fn count(&self) -> usize {
+        semaphore_count(self.handle())
+    }
+}
+
+/// Rust 风格计数信号量（容量 `N`，初始计数 0）。
+pub struct CountingSemaphore<const N: usize> {
+    inner: Queue,
+    initialised: AtomicBool,
+}
+
+impl<const N: usize> CountingSemaphore<N> {
+    pub const fn new() -> Self {
+        Self {
+            inner: Queue::empty(),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> QueueHandle {
+        &self.inner as *const Queue as *mut Queue
+    }
+
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    queue::queue_create(self.handle(), ptr::null_mut(), N, 0, QUEUE_TYPE_COUNTING_SEMAPHORE);
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 阻塞获取，返回 RAII 许可。
+    pub fn acquire(&self) -> SemaphorePermit {
+        self.ensure_init();
+        let _ = semaphore_take(self.handle(), config::INFINITE);
+        SemaphorePermit { handle: self.handle() }
+    }
+
+    /// 非阻塞获取。
+    pub fn try_acquire(&self) -> Option<SemaphorePermit> {
+        self.ensure_init();
+        semaphore_take(self.handle(), 0)
+            .ok()
+            .map(|()| SemaphorePermit { handle: self.handle() })
+    }
+
+    /// 带超时获取。
+    pub fn acquire_timeout(&self, timeout: TickType) -> Option<SemaphorePermit> {
+        self.ensure_init();
+        semaphore_take(self.handle(), timeout)
+            .ok()
+            .map(|()| SemaphorePermit { handle: self.handle() })
+    }
+
+    /// 释放（计数 +1，可从中断调用）。
+    pub fn release(&self) -> Result<(), QueueError> {
+        self.ensure_init();
+        semaphore_give(self.handle(), 0)
+    }
+
+    /// 当前计数。
+    pub fn count(&self) -> usize {
+        semaphore_count(self.handle())
+    }
+
+    /// 容量。
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+}
+
+unsafe impl Send for BinarySemaphore {}
+unsafe impl Sync for BinarySemaphore {}
+unsafe impl<const N: usize> Send for CountingSemaphore<N> {}
+unsafe impl<const N: usize> Sync for CountingSemaphore<N> {}

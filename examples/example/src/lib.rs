@@ -20,17 +20,17 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 // ---------------------------------------------------------------------
-// 基础内核对象：一行声明，静态存储由宏生成，首次访问时惰性初始化
+// 内核对象：Rust 风格静态类型（普通 static，方法调用，首次使用惰性初始化）
 // ---------------------------------------------------------------------
 
-// 消息队列：4 个 u32
-kernel::static_queue!(MSG_QUEUE, u32, 4);
+// 消息队列：容量 4 个 u32
+static MSG_QUEUE: kernel::StaticQueue<u32, 4> = kernel::StaticQueue::new();
 // 二值信号量
-kernel::static_semaphore!(BINARY_SEM);
-// 计数信号量（最多 8，初始 0）
-kernel::static_semaphore!(COUNT_SEM, 8, 0);
+static BINARY_SEM: kernel::BinarySemaphore = kernel::BinarySemaphore::new();
+// 计数信号量（容量 8，初始 0）
+static COUNT_SEM: kernel::CountingSemaphore<8> = kernel::CountingSemaphore::new();
 // 事件组
-kernel::static_event_group!(EVENTS);
+static EVENTS: kernel::EventFlags = kernel::EventFlags::new();
 
 // ---------------------------------------------------------------------
 // 高级特性 1：内存管理（静态堆 + kmalloc/kfree）
@@ -74,8 +74,6 @@ pub fn heap_task(_arg: u32) -> ! {
 // 高级特性 2：任务通知
 // ---------------------------------------------------------------------
 
-static mut NOTIFY_TASK_HANDLE: kernel::TaskHandle = ptr::null_mut();
-
 /// 等待通知的任务（每次被通知后处理一次）。
 #[kernel::task(stack = 1024, priority = 2)]
 pub fn notify_waiter(_arg: u32) -> ! {
@@ -86,16 +84,13 @@ pub fn notify_waiter(_arg: u32) -> ! {
     }
 }
 
-/// 周期性发送通知的任务。
+/// 周期性发送通知的任务：`Notifier` 绑定目标任务的句柄，方法式发送。
 #[kernel::task(stack = 1024, priority = 3)]
-pub fn notifier(_arg: u32) -> ! {
+pub fn notifier(n: kernel::Notifier) -> ! {
     loop {
         kernel::task_delay(500);
-        unsafe {
-            let wake = kernel::notify_give(NOTIFY_TASK_HANDLE);
-            if wake {
-                kernel::task_yield();
-            }
+        if n.give() {
+            kernel::task_yield();
         }
     }
 }
@@ -104,10 +99,10 @@ pub fn notifier(_arg: u32) -> ! {
 // 高级特性 3：流缓冲 + 消息缓冲
 // ---------------------------------------------------------------------
 
-// 流缓冲：256 字节，触发级别 1
-kernel::static_stream_buffer!(STREAM, 256, 1);
+// 流缓冲：256 字节
+static STREAM: kernel::StaticStreamBuffer<256> = kernel::StaticStreamBuffer::new();
 // 消息缓冲：256 字节（含 4 字节长度头）
-kernel::static_message_buffer!(MSGS, 256);
+static MSGS: kernel::StaticMessageBuffer<256> = kernel::StaticMessageBuffer::new();
 
 /// 流/消息生产者。
 #[kernel::task(stack = 1024, priority = 2)]
@@ -115,8 +110,8 @@ pub fn stream_producer(_arg: u32) -> ! {
     let mut counter: u32 = 0;
     loop {
         let data = counter.to_le_bytes();
-        let _ = kernel::stream_buffer_send(STREAM(), &data, INFINITE);
-        let _ = kernel::message_buffer_send(MSGS(), &data, INFINITE);
+        let _ = STREAM.write(&data);
+        let _ = MSGS.send(&data);
         counter = counter.wrapping_add(1);
         kernel::task_delay(200);
     }
@@ -128,11 +123,11 @@ pub fn stream_consumer(_arg: u32) -> ! {
     loop {
         let mut buf = [0u8; 8];
         // 流：读多少算多少
-        let n = kernel::stream_buffer_receive(STREAM(), &mut buf, INFINITE);
+        let n = STREAM.read(&mut buf);
         let _ = n;
-        // 消息：按完整消息读（跨调用时由内核维护进度）
+        // 消息：一次性读出整条消息（buf 需 >= 消息长度）
         let mut msg = [0u8; 8];
-        let m = kernel::message_buffer_receive(MSGS(), &mut msg, INFINITE);
+        let m = MSGS.recv(&mut msg);
         let _ = m;
     }
 }
@@ -171,8 +166,8 @@ fn producer_co(co: &mut kernel::CoRoutine) {
 pub fn producer(_arg: u32) -> ! {
     let mut counter: u32 = 0;
     loop {
-        let _ = kernel::queue_send(MSG_QUEUE(), (&raw const counter) as *const u8, INFINITE);
-        let _ = kernel::event_group_set_bits(EVENTS(), 0x01);
+        let _ = MSG_QUEUE.send(counter);
+        let _ = EVENTS.set(0x01);
         counter = counter.wrapping_add(1);
         kernel::task_delay(100);
     }
@@ -181,8 +176,7 @@ pub fn producer(_arg: u32) -> ! {
 #[kernel::task(stack = 1024, priority = 2)]
 pub fn consumer(_arg: u32) -> ! {
     loop {
-        let mut value: u32 = 0;
-        if kernel::queue_receive(MSG_QUEUE(), (&raw mut value) as *mut u8, INFINITE).is_ok() {
+        if let Ok(value) = MSG_QUEUE.recv() {
             let _ = value;
         }
     }
@@ -205,10 +199,13 @@ pub fn mutex_task(_arg: u32) -> ! {
 #[kernel::task(stack = 1024, priority = 1)]
 pub fn sync_task(_arg: u32) -> ! {
     loop {
-        let bits = kernel::event_group_wait_bits(EVENTS(), 0x01, true, false, INFINITE);
+        let bits = EVENTS.wait_any(0x01, true, INFINITE);
         let _ = bits;
-        let _ = kernel::semaphore_take(COUNT_SEM(), INFINITE);
-        let _ = kernel::semaphore_give(COUNT_SEM(), 0);
+        // 计数信号量：acquire 返回 RAII 许可，离开作用域自动 release
+        let _permit = COUNT_SEM.acquire();
+        // 二值信号量：初始为空，release 一次后 acquire 取到许可
+        let _ = BINARY_SEM.release();
+        let _gate = BINARY_SEM.acquire();
     }
 }
 
@@ -242,16 +239,13 @@ pub fn setup() {
         );
     }
 
-    // 2) 任务通知：先创建等待任务，再让发送者持有其句柄
+    // 2) 任务通知：先创建等待任务，再把它的句柄封装成 Notifier 传给发送者
     let waiter = notify_waiter(0);
-    unsafe {
-        NOTIFY_TASK_HANDLE = waiter;
-    }
     kernel::spawn(waiter);
+    kernel::spawn(notifier(kernel::Notifier::new(waiter)));
 
     // 3) 其余任务
     kernel::spawn(heap_task(0));
-    kernel::spawn(notifier(0));
     kernel::spawn(stream_producer(0));
     kernel::spawn(stream_consumer(0));
     kernel::spawn(producer(0));

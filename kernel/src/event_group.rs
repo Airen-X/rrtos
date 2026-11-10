@@ -4,6 +4,7 @@
 //! 任务可等待任意位（OR）或全部位（AND）被置位。
 
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{MAX_TASKS, TaskHandle, TickType};
 use crate::list::{List, ListItem};
@@ -187,3 +188,102 @@ pub fn event_group_wait_bits(
         }
     }
 }
+
+// =====================================================================
+// Rust 风格事件组：`EventFlags` —— 方法式置位/等待
+// =====================================================================
+
+/// 等待模式：任一位置位（OR）或全部位置位（AND）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WaitMode {
+    /// 等待的位中任意一位置位即返回。
+    Any,
+    /// 等待的所有位都置位才返回。
+    All,
+}
+
+/// Rust 风格事件组（24 位事件位，普通 `static` 即可使用）。
+///
+/// ```ignore
+/// static EVT: kernel::EventFlags = kernel::EventFlags::new();
+///
+/// EVT.set(0b0001);                       // 置位
+/// let bits = EVT.wait_any(0b0011, true, kernel::INFINITE); // 等待任一位置位
+/// ```
+pub struct EventFlags {
+    inner: EventGroup,
+    initialised: AtomicBool,
+}
+
+impl EventFlags {
+    pub const fn new() -> Self {
+        Self {
+            inner: EventGroup::empty(),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> EventGroupHandle {
+        &self.inner as *const EventGroup as *mut EventGroup
+    }
+
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    event_group_create(self.handle());
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 置位，返回新的位值。
+    pub fn set(&self, bits: u32) -> u32 {
+        self.ensure_init();
+        event_group_set_bits(self.handle(), bits)
+    }
+
+    /// 清零，返回新的位值。
+    pub fn clear(&self, bits: u32) -> u32 {
+        self.ensure_init();
+        event_group_clear_bits(self.handle(), bits)
+    }
+
+    /// 读取当前位值。
+    pub fn get(&self) -> u32 {
+        event_group_get_bits(self.handle())
+    }
+
+    /// 等待事件位。
+    ///
+    /// - `mode`：任意位（[`WaitMode::Any`]）或全部位（[`WaitMode::All`]）；
+    /// - `clear_on_exit`：返回前清零所等待的位；
+    /// - 返回触发时的位值；超时返回 0。
+    pub fn wait(&self, bits: u32, clear_on_exit: bool, mode: WaitMode, timeout: TickType) -> u32 {
+        self.ensure_init();
+        event_group_wait_bits(
+            self.handle(),
+            bits,
+            clear_on_exit,
+            mode == WaitMode::All,
+            timeout,
+        )
+    }
+
+    /// 等待任意位置位。
+    pub fn wait_any(&self, bits: u32, clear_on_exit: bool, timeout: TickType) -> u32 {
+        self.wait(bits, clear_on_exit, WaitMode::Any, timeout)
+    }
+
+    /// 等待所有位置位。
+    pub fn wait_all(&self, bits: u32, clear_on_exit: bool, timeout: TickType) -> u32 {
+        self.wait(bits, clear_on_exit, WaitMode::All, timeout)
+    }
+}
+
+unsafe impl Send for EventFlags {}
+unsafe impl Sync for EventFlags {}

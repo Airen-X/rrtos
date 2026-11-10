@@ -271,3 +271,139 @@ pub unsafe fn queue_receive_from_isr(q: QueueHandle, buf: *mut u8) -> bool {
 pub fn queue_messages_waiting(q: QueueHandle) -> usize {
     unsafe { (*q).messages_waiting }
 }
+
+// =====================================================================
+// Rust 风格消息队列：`StaticQueue<T, N>` —— 类型安全 + 静态存储 + 方法调用
+// =====================================================================
+
+use core::cell::UnsafeCell;
+use core::mem::{size_of, MaybeUninit};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Rust 风格的静态消息队列：`StaticQueue<T, N>`（容量 `N` 个 `T`）。
+///
+/// 普通 `static` 即可使用，方法式收发（元素按原始字节环形拷贝，无 `Copy` 要求）：
+/// ```ignore
+/// static Q: kernel::StaticQueue<u32, 4> = kernel::StaticQueue::new();
+///
+/// Q.send(42);                       // 阻塞直到有空间
+/// if let Ok(v) = Q.try_recv() { }   // 非阻塞接收
+/// ```
+pub struct StaticQueue<T, const N: usize> {
+    inner: Queue,
+    buf: UnsafeCell<MaybeUninit<[T; N]>>,
+    initialised: AtomicBool,
+}
+
+impl<T, const N: usize> StaticQueue<T, N> {
+    /// 构造空队列（`const`，可用于 `static` 初始化；首次使用时惰性初始化）。
+    pub const fn new() -> Self {
+        Self {
+            inner: Queue::empty(),
+            buf: UnsafeCell::new(MaybeUninit::uninit()),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> QueueHandle {
+        &self.inner as *const Queue as *mut Queue
+    }
+
+    /// 惰性初始化（线程/中断安全，仅执行一次）。
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    queue_create(
+                        self.handle(),
+                        self.buf.get() as *mut u8,
+                        N,
+                        size_of::<T>(),
+                        QUEUE_TYPE_BASE,
+                    );
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 发送（阻塞直到有空间）。
+    pub fn send(&self, item: T) -> Result<(), QueueError> {
+        self.ensure_init();
+        queue_send(self.handle(), &item as *const T as *const u8, config::INFINITE)
+    }
+
+    /// 非阻塞发送。
+    pub fn try_send(&self, item: T) -> Result<(), QueueError> {
+        self.ensure_init();
+        queue_send(self.handle(), &item as *const T as *const u8, 0)
+    }
+
+    /// 带超时的发送（`timeout` 个节拍，`config::INFINITE` 表示无限）。
+    pub fn send_timeout(&self, item: T, timeout: TickType) -> Result<(), QueueError> {
+        self.ensure_init();
+        queue_send(self.handle(), &item as *const T as *const u8, timeout)
+    }
+
+    /// 接收（阻塞直到有数据）。
+    pub fn recv(&self) -> Result<T, QueueError> {
+        self.ensure_init();
+        unsafe {
+            let mut slot = MaybeUninit::<T>::uninit();
+            queue_receive(self.handle(), slot.as_mut_ptr() as *mut u8, config::INFINITE)
+                .map(|()| slot.assume_init())
+        }
+    }
+
+    /// 非阻塞接收。
+    pub fn try_recv(&self) -> Result<T, QueueError> {
+        self.ensure_init();
+        unsafe {
+            let mut slot = MaybeUninit::<T>::uninit();
+            queue_receive(self.handle(), slot.as_mut_ptr() as *mut u8, 0)
+                .map(|()| slot.assume_init())
+        }
+    }
+
+    /// 带超时的接收。
+    pub fn recv_timeout(&self, timeout: TickType) -> Result<T, QueueError> {
+        self.ensure_init();
+        unsafe {
+            let mut slot = MaybeUninit::<T>::uninit();
+            queue_receive(self.handle(), slot.as_mut_ptr() as *mut u8, timeout)
+                .map(|()| slot.assume_init())
+        }
+    }
+
+    /// 当前消息数。
+    pub fn len(&self) -> usize {
+        queue_messages_waiting(self.handle())
+    }
+
+    /// 容量。
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+
+    /// 是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// 是否已满。
+    pub fn is_full(&self) -> bool {
+        self.len() >= N
+    }
+
+    /// 是否已初始化（调试用）。
+    pub fn is_initialised(&self) -> bool {
+        self.initialised.load(Ordering::Acquire)
+    }
+}
+
+// 内部含裸指针（Queue），手工声明线程安全语义：队列自身在临界区内串行化访问。
+unsafe impl<T: Send, const N: usize> Send for StaticQueue<T, N> {}
+unsafe impl<T: Send, const N: usize> Sync for StaticQueue<T, N> {}

@@ -4,7 +4,9 @@
 //! - 流缓冲：面向字节流，带触发级别（达到后唤醒接收者）；
 //! - 消息缓冲：在流缓冲之上增加 4 字节消息长度头，可跨多次调用读取一条消息。
 
+use core::cell::UnsafeCell;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{INFINITE, TickType};
 use crate::list::List;
@@ -474,3 +476,198 @@ pub fn message_buffer_receive(h: MessageBufferHandle, buf: &mut [u8], timeout: T
         }
     }
 }
+
+// =====================================================================
+// Rust 风格流/消息缓冲：`StaticStreamBuffer<N>` / `StaticMessageBuffer<N>`
+// =====================================================================
+
+/// Rust 风格静态流缓冲（容量 `N` 字节，普通 `static` 即可使用）。
+///
+/// ```ignore
+/// static SB: kernel::StaticStreamBuffer<256> = kernel::StaticStreamBuffer::new();
+///
+/// let n = SB.write(b"hello");    // 阻塞写入全部
+/// let mut buf = [0u8; 16];
+/// let n = SB.read(&mut buf);     // 阻塞读取
+/// ```
+pub struct StaticStreamBuffer<const N: usize> {
+    inner: StreamBuffer,
+    buf: UnsafeCell<[u8; N]>,
+    initialised: AtomicBool,
+}
+
+impl<const N: usize> StaticStreamBuffer<N> {
+    pub const fn new() -> Self {
+        Self {
+            inner: StreamBuffer::empty(),
+            buf: UnsafeCell::new([0u8; N]),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> StreamBufferHandle {
+        &self.inner as *const StreamBuffer as *mut StreamBuffer
+    }
+
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    stream_buffer_create(
+                        self.handle(),
+                        self.buf.get() as *mut u8,
+                        N,
+                        1,
+                    );
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 阻塞写入，直到全部写入（返回写入字节数，等于 `data.len()`）。
+    pub fn write(&self, data: &[u8]) -> usize {
+        self.ensure_init();
+        stream_buffer_send(self.handle(), data, INFINITE)
+    }
+
+    /// 非阻塞写入（可能只写入一部分，返回实际写入字节数）。
+    pub fn try_write(&self, data: &[u8]) -> usize {
+        self.ensure_init();
+        stream_buffer_send(self.handle(), data, 0)
+    }
+
+    /// 带超时写入。
+    pub fn write_timeout(&self, data: &[u8], timeout: TickType) -> usize {
+        self.ensure_init();
+        stream_buffer_send(self.handle(), data, timeout)
+    }
+
+    /// 阻塞读取，直到 `buf` 填满（返回实际读出字节数）。
+    pub fn read(&self, buf: &mut [u8]) -> usize {
+        self.ensure_init();
+        stream_buffer_receive(self.handle(), buf, INFINITE)
+    }
+
+    /// 非阻塞读取。
+    pub fn try_read(&self, buf: &mut [u8]) -> usize {
+        self.ensure_init();
+        stream_buffer_receive(self.handle(), buf, 0)
+    }
+
+    /// 带超时读取。
+    pub fn read_timeout(&self, buf: &mut [u8], timeout: TickType) -> usize {
+        self.ensure_init();
+        stream_buffer_receive(self.handle(), buf, timeout)
+    }
+
+    /// 当前可用字节数。
+    pub fn available(&self) -> usize {
+        stream_buffer_bytes(self.handle())
+    }
+
+    /// 当前空闲字节数。
+    pub fn space(&self) -> usize {
+        stream_buffer_spaces(self.handle())
+    }
+
+    /// 容量。
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+}
+
+/// Rust 风格静态消息缓冲（容量 `N` 字节，含 4 字节消息长度头）。
+///
+/// 注意：`recv` 一次性读出**整条**消息，`buf` 长度须 >= 消息长度，
+/// 否则返回 0 且不消费任何数据。
+///
+/// ```ignore
+/// static MB: kernel::StaticMessageBuffer<256> = kernel::StaticMessageBuffer::new();
+///
+/// MB.send(b"hello");              // 阻塞发送一条消息
+/// let mut buf = [0u8; 32];
+/// let n = MB.recv(&mut buf);      // 阻塞接收整条消息
+/// ```
+pub struct StaticMessageBuffer<const N: usize> {
+    inner: MessageBuffer,
+    buf: UnsafeCell<[u8; N]>,
+    initialised: AtomicBool,
+}
+
+impl<const N: usize> StaticMessageBuffer<N> {
+    pub const fn new() -> Self {
+        Self {
+            inner: MessageBuffer::empty(),
+            buf: UnsafeCell::new([0u8; N]),
+            initialised: AtomicBool::new(false),
+        }
+    }
+
+    #[inline]
+    fn handle(&self) -> MessageBufferHandle {
+        &self.inner as *const MessageBuffer as *mut MessageBuffer
+    }
+
+    fn ensure_init(&self) {
+        if !self.initialised.load(Ordering::Acquire) {
+            unsafe {
+                port::enter_critical();
+                if !self.initialised.load(Ordering::Relaxed) {
+                    message_buffer_create(self.handle(), self.buf.get() as *mut u8, N);
+                    self.initialised.store(true, Ordering::Release);
+                }
+                port::exit_critical();
+            }
+        }
+    }
+
+    /// 阻塞发送一条消息；消息过长（> N-4）时返回 `false`。
+    pub fn send(&self, data: &[u8]) -> bool {
+        self.ensure_init();
+        message_buffer_send(self.handle(), data, INFINITE)
+    }
+
+    /// 非阻塞发送。
+    pub fn try_send(&self, data: &[u8]) -> bool {
+        self.ensure_init();
+        message_buffer_send(self.handle(), data, 0)
+    }
+
+    /// 带超时发送。
+    pub fn send_timeout(&self, data: &[u8], timeout: TickType) -> bool {
+        self.ensure_init();
+        message_buffer_send(self.handle(), data, timeout)
+    }
+
+    /// 阻塞接收整条消息（`buf` 须 >= 消息长度，否则返回 0 且不消费）。
+    pub fn recv(&self, buf: &mut [u8]) -> usize {
+        self.ensure_init();
+        message_buffer_receive(self.handle(), buf, INFINITE)
+    }
+
+    /// 非阻塞接收。
+    pub fn try_recv(&self, buf: &mut [u8]) -> usize {
+        self.ensure_init();
+        message_buffer_receive(self.handle(), buf, 0)
+    }
+
+    /// 带超时接收。
+    pub fn recv_timeout(&self, buf: &mut [u8], timeout: TickType) -> usize {
+        self.ensure_init();
+        message_buffer_receive(self.handle(), buf, timeout)
+    }
+
+    /// 容量。
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+}
+
+unsafe impl<const N: usize> Send for StaticStreamBuffer<N> {}
+unsafe impl<const N: usize> Sync for StaticStreamBuffer<N> {}
+unsafe impl<const N: usize> Send for StaticMessageBuffer<N> {}
+unsafe impl<const N: usize> Sync for StaticMessageBuffer<N> {}

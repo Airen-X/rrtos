@@ -63,16 +63,19 @@ pub use scheduler::{init, max_priorities, max_tasks, start_scheduler, systick_in
 pub use queue::{
     queue_create, queue_is_empty, queue_is_full, queue_messages_waiting, queue_receive,
     queue_receive_from_isr, queue_send, queue_send_from_isr, Queue, QueueError, QueueHandle,
-    QUEUE_TYPE_BASE, QUEUE_TYPE_BINARY_SEMAPHORE, QUEUE_TYPE_COUNTING_SEMAPHORE, QUEUE_TYPE_MUTEX,
+    StaticQueue, QUEUE_TYPE_BASE, QUEUE_TYPE_BINARY_SEMAPHORE, QUEUE_TYPE_COUNTING_SEMAPHORE,
+    QUEUE_TYPE_MUTEX,
 };
 pub use semaphore::{
     semaphore_count, semaphore_create_binary, semaphore_create_counting, semaphore_give,
-    semaphore_give_from_isr, semaphore_take, semaphore_take_from_isr,
+    semaphore_give_from_isr, semaphore_take, semaphore_take_from_isr, BinarySemaphore,
+    CountingSemaphore, SemaphorePermit,
 };
 pub use mutex::{mutex_create, mutex_holder, mutex_lock, mutex_unlock, Mutex, MutexGuard};
 pub use event_group::{
     event_group_clear_bits, event_group_create, event_group_get_bits, event_group_set_bits,
-    event_group_set_bits_from_isr, event_group_wait_bits, EventGroup, EventGroupHandle,
+    event_group_set_bits_from_isr, event_group_wait_bits, EventFlags, EventGroup,
+    EventGroupHandle, WaitMode,
 };
 pub use timer::{
     timer_create, timer_reset, timer_start, timer_start_from_isr, timer_stop, timer_stop_from_isr,
@@ -85,14 +88,14 @@ pub use heap::{heap_free_bytes, heap_init, heap_total_bytes, kfree, kmalloc, Ker
 #[cfg(feature = "task-notification")]
 pub use notification::{
     notify_give, notify_give_from_isr, notify_overwrite, notify_set_bits, notify_take,
-    notify_value, notify_wait,
+    notify_value, notify_wait, Notifier,
 };
 #[cfg(feature = "stream-buffer")]
 pub use stream_buffer::{
     message_buffer_create, message_buffer_receive, message_buffer_send, stream_buffer_bytes,
     stream_buffer_create, stream_buffer_receive, stream_buffer_receive_from_isr, stream_buffer_send,
     stream_buffer_send_from_isr, stream_buffer_spaces, MessageBuffer, MessageBufferHandle,
-    StreamBuffer, StreamBufferHandle,
+    StaticMessageBuffer, StaticStreamBuffer, StreamBuffer, StreamBufferHandle,
 };
 #[cfg(feature = "coroutine")]
 pub use coroutine::{

@@ -156,3 +156,57 @@ pub fn notify_wait(clear_on_exit: bool, timeout: TickType) -> Option<u32> {
 pub fn notify_value() -> u32 {
     unsafe { (*task::current_task()).notification }
 }
+
+// =====================================================================
+// Rust 风格任务通知：`Notifier` —— 面向某个任务的发送端
+// =====================================================================
+
+/// Rust 风格通知发送端：绑定一个目标任务，方法式发送。
+///
+/// 接收端仍使用 [`notify_take`] / [`notify_wait`]（作用于当前任务）。
+///
+/// ```ignore
+/// static WAITER: kernel::Notifier = kernel::Notifier::new(waiter_handle);
+///
+/// WAITER.give();        // 计数 +1（可从中断调用）
+/// WAITER.set_bits(1);   // 按位或
+/// WAITER.overwrite(42); // 覆盖写入
+/// ```
+pub struct Notifier {
+    task: TaskHandle,
+}
+
+impl Notifier {
+    /// 绑定目标任务（`#[task]` 构造器返回的句柄）。
+    pub const fn new(task: TaskHandle) -> Self {
+        Self { task }
+    }
+
+    /// 通知值 +1，对应 `xTaskNotifyGive`。返回 `true` 表示唤醒了更高优先级任务。
+    pub fn give(&self) -> bool {
+        unsafe { notify_give(self.task) }
+    }
+
+    /// 按位或置位，对应 `eSetBits`。
+    pub fn set_bits(&self, bits: u32) -> bool {
+        unsafe { notify_set_bits(self.task, bits) }
+    }
+
+    /// 覆盖写入，对应 `eSetValueWithOverwrite`。
+    pub fn overwrite(&self, value: u32) -> bool {
+        unsafe { notify_overwrite(self.task, value) }
+    }
+
+    /// 从中断调用：通知值 +1。
+    pub fn give_from_isr(&self) -> bool {
+        unsafe { notify_give_from_isr(self.task) }
+    }
+
+    /// 目标任务句柄。
+    pub const fn task(&self) -> TaskHandle {
+        self.task
+    }
+}
+
+unsafe impl Send for Notifier {}
+unsafe impl Sync for Notifier {}

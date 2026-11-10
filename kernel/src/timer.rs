@@ -9,7 +9,7 @@ use core::ptr;
 use crate::config::{self, TickType};
 use crate::list::{List, ListItem};
 use crate::port;
-use crate::queue::{self, Queue, QueueError, QUEUE_TYPE_BASE};
+use crate::queue::{self, QUEUE_TYPE_BASE, Queue, QueueError};
 use crate::scheduler;
 use crate::task::{self, Task};
 
@@ -69,13 +69,12 @@ static mut TIMER_DAEMON_TCB: Task = Task::empty();
 #[repr(align(8))]
 #[allow(dead_code)]
 struct DaemonStack([u8; config::TIMER_DAEMON_STACK_SIZE]);
-static mut TIMER_DAEMON_STACK: DaemonStack =
-    DaemonStack([0; config::TIMER_DAEMON_STACK_SIZE]);
+static mut TIMER_DAEMON_STACK: DaemonStack = DaemonStack([0; config::TIMER_DAEMON_STACK_SIZE]);
 
 // Rust 2024 禁止对 `static mut` 取引用，统一走裸指针访问。
 #[inline(always)]
 unsafe fn active_timers() -> *mut List {
-    ptr::addr_of_mut!(ACTIVE_TIMERS)
+    &raw mut ACTIVE_TIMERS
 }
 
 /// 时刻 `target` 是否已到达（考虑回绕，假设差值 < 2^31）。
@@ -211,7 +210,7 @@ pub(crate) unsafe fn init() {
         (*active_timers()).initialise();
         queue::queue_create(
             &raw mut TIMER_CMD_QUEUE,
-            ptr::addr_of_mut!(TIMER_CMD_STORAGE) as *mut u8,
+            &raw mut TIMER_CMD_STORAGE as *mut u8,
             config::TIMER_COMMAND_QUEUE_LEN,
             size_of::<TimerCommandMsg>(),
             QUEUE_TYPE_BASE,
@@ -222,7 +221,7 @@ pub(crate) unsafe fn init() {
             &raw mut TIMER_DAEMON_TCB,
             timer_daemon,
             "tmr svc",
-            ptr::addr_of_mut!(TIMER_DAEMON_STACK) as *mut u8,
+            &raw mut TIMER_DAEMON_STACK as *mut u8,
             config::TIMER_DAEMON_STACK_SIZE,
             ptr::null_mut(),
             prio,
@@ -262,7 +261,11 @@ pub fn timer_start(handle: TimerHandle, timeout: TickType) -> Result<(), QueueEr
             handle,
             time: scheduler::tick_count(),
         };
-        queue::queue_send(&raw mut TIMER_CMD_QUEUE, &raw const msg as *const u8, timeout)
+        queue::queue_send(
+            &raw mut TIMER_CMD_QUEUE,
+            &raw const msg as *const u8,
+            timeout,
+        )
     }
 }
 
@@ -273,7 +276,11 @@ pub fn timer_stop(handle: TimerHandle, timeout: TickType) -> Result<(), QueueErr
         handle,
         time: 0,
     };
-    queue::queue_send(&raw mut TIMER_CMD_QUEUE, &raw const msg as *const u8, timeout)
+    queue::queue_send(
+        &raw mut TIMER_CMD_QUEUE,
+        &raw const msg as *const u8,
+        timeout,
+    )
 }
 
 /// 复位定时器（任务级），对应 `xTimerReset`。
@@ -284,7 +291,11 @@ pub fn timer_reset(handle: TimerHandle, timeout: TickType) -> Result<(), QueueEr
             handle,
             time: scheduler::tick_count(),
         };
-        queue::queue_send(&raw mut TIMER_CMD_QUEUE, &raw const msg as *const u8, timeout)
+        queue::queue_send(
+            &raw mut TIMER_CMD_QUEUE,
+            &raw const msg as *const u8,
+            timeout,
+        )
     }
 }
 

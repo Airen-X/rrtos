@@ -52,27 +52,27 @@ static mut ACTIVE_CONFIG: config::KernelConfig = config::KernelConfig {
 
 // =====================================================================
 // 可变静态的裸指针访问器
-// （Rust 2024 禁止对 `static mut` 取引用，统一走 `addr_of_mut!`）
+// （Rust 2024 禁止对 `static mut` 取引用，统一走 `&raw mut`）
 // =====================================================================
 
 #[inline(always)]
 unsafe fn ready_ptr(prio: usize) -> *mut List {
-    unsafe { (ptr::addr_of_mut!(READY_LISTS) as *mut List).add(prio) }
+    unsafe { (&raw mut READY_LISTS as *mut List).add(prio) }
 }
 
 #[inline(always)]
 unsafe fn delayed_ptr() -> *mut List {
-    ptr::addr_of_mut!(DELAYED_LIST)
+    &raw mut DELAYED_LIST
 }
 
 #[inline(always)]
 unsafe fn overflow_ptr() -> *mut List {
-    ptr::addr_of_mut!(OVERFLOW_DELAYED_LIST)
+    &raw mut OVERFLOW_DELAYED_LIST
 }
 
 #[inline(always)]
 unsafe fn suspended_ptr() -> *mut List {
-    ptr::addr_of_mut!(SUSPENDED_LIST)
+    &raw mut SUSPENDED_LIST
 }
 
 // =====================================================================
@@ -194,7 +194,10 @@ pub unsafe fn task_count() -> usize {
 pub unsafe fn add_to_ready_list(t: TaskHandle) {
     unsafe {
         let prio = (*t).priority as usize;
-        debug_assert!(prio < ACTIVE_CONFIG.max_priorities, "任务优先级超出配置范围");
+        debug_assert!(
+            prio < ACTIVE_CONFIG.max_priorities,
+            "任务优先级超出配置范围"
+        );
         (*t).state_item.item_value = prio as u32;
         (*ready_ptr(prio)).insert_end(&mut (*t).state_item);
         TOP_READY_PRIORITY |= 1 << prio;
@@ -332,8 +335,7 @@ pub unsafe fn remove_from_event_list(event_list: *mut List) -> bool {
 #[cfg(feature = "task-notification")]
 pub unsafe fn unblock_task(t: TaskHandle) -> bool {
     unsafe {
-        if t.is_null() || ((*t).state != TaskState::Blocked && (*t).state != TaskState::Suspended)
-        {
+        if t.is_null() || ((*t).state != TaskState::Blocked && (*t).state != TaskState::Suspended) {
             return false;
         }
         List::remove(&mut (*t).state_item);
@@ -517,10 +519,10 @@ unsafe extern "C" fn idle_task(_: *mut ()) -> ! {
 unsafe fn create_idle_task() {
     unsafe {
         let h = crate::task::task_create(
-            ptr::addr_of_mut!(IDLE_TCB),
+            &raw mut IDLE_TCB,
             idle_task,
             "idle",
-            ptr::addr_of_mut!(IDLE_STACK) as *mut u8,
+            &raw mut IDLE_STACK as *mut u8,
             config::IDLE_STACK_SIZE,
             ptr::null_mut(),
             0,

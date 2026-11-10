@@ -143,7 +143,7 @@ fn producer_co(co: &mut kernel::CoRoutine) {
     match co.step {
         0 => {
             let mut val: u32 = 0xAA;
-            if kernel::co_queue_send(ptr::addr_of_mut!(CO_QUEUE), (&raw mut val) as *const u8) {
+            if kernel::co_queue_send(&raw mut CO_QUEUE, (&raw mut val) as *const u8) {
                 co.step = 1;
             }
             co.delay(100);

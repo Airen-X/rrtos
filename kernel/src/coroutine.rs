@@ -59,12 +59,12 @@ static mut DELAYED: List = List::new();
 // Rust 2024 禁止对 `static mut` 取引用，统一走裸指针访问。
 #[inline(always)]
 unsafe fn ready_ptr() -> *mut List {
-    ptr::addr_of_mut!(READY)
+    &raw mut READY
 }
 
 #[inline(always)]
 unsafe fn delayed_ptr() -> *mut List {
-    ptr::addr_of_mut!(DELAYED)
+    &raw mut DELAYED
 }
 
 // 就绪列表按“优先级越高值越小”排序（0 = 最高优先级在最前）。

@@ -276,8 +276,9 @@ unsafe impl core::alloc::GlobalAlloc for KernelAllocator {
 #[macro_export]
 macro_rules! use_alloc {
     ($name:ident:$size:expr) => {
+        static mut $name: [u8; $size] = [0; $size];
+
         #[global_allocator]
         static __RRTOS_GLOBAL_ALLOCATOR__: $crate::KernelAllocator = $crate::KernelAllocator;
-        static mut $name: [u8; $size] = [0; $size];
     };
 }
